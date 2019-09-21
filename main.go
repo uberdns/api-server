@@ -1,7 +1,12 @@
+//To-Do:
+// - Prometheus stats
+// - debug logging
+
 package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -43,7 +48,6 @@ type User struct {
 
 var dbConn sql.DB
 var redisClient *redis.Client
-var redisCacheChannel *redis.PubSub
 var redisCacheChannelName string
 
 func dbConnect(username string, password string, host string, port int, database string) error {
@@ -248,7 +252,13 @@ func isAllowed(accessToken string, record Record) bool {
 }
 
 func purgeCache(cacheChannel string, record Record) error {
-	err := redisClient.Publish(cacheChannel, "fuck").Err()
+
+	recordJSON, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+
+	err = redisClient.Publish(cacheChannel, recordJSON).Err()
 	if err != nil {
 		return err
 	}
@@ -438,7 +448,7 @@ func main() {
 	}()
 
 	go func() {
-		redisCacheChannel = redisClient.Subscribe(redisCacheChannelName)
+		redisCacheChannel := redisClient.Subscribe(redisCacheChannelName)
 		_, err := redisCacheChannel.Receive()
 		if err != nil {
 			panic(err)
