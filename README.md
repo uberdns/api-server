@@ -12,9 +12,8 @@ This is the API service for lsof.top - its written in Go.
 
 # Quickstart
 ```
-1. go get -v ./...
-2. go build .
-3. ./api-server
+1. docker build -t api-server .
+2. docker run --net=host -it api-server
 ```
 
 # To-do
