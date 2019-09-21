@@ -14,6 +14,7 @@ import (
 
 	_ "github.com/go-sql-driver/mysql"
 
+	"github.com/go-redis/redis"
 	"github.com/gorilla/mux"
 	"gopkg.in/ini.v1"
 )
@@ -41,6 +42,9 @@ type User struct {
 }
 
 var dbConn sql.DB
+var redisClient *redis.Client
+var redisCacheChannel *redis.PubSub
+var redisCacheChannelName string
 
 func dbConnect(username string, password string, host string, port int, database string) error {
 	conn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?parseTime=true", username, password, host, port, database)
@@ -243,6 +247,14 @@ func isAllowed(accessToken string, record Record) bool {
 	return false
 }
 
+func purgeCache(cacheChannel string, record Record) error {
+	err := redisClient.Publish(cacheChannel, "fuck").Err()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func indexView(w http.ResponseWriter, r *http.Request) {
 	fmt.Println("validating request")
 	if isValidRequest(w, r) {
@@ -304,9 +316,9 @@ func updateRecordView(w http.ResponseWriter, r *http.Request) {
 // To-do: Check for existing records
 func createRecordView(w http.ResponseWriter, r *http.Request) {
 	if isValidRequest(w, r) {
-		apiKey := fmt.Sprintf("%s", r.Header["X-Api-Key"])
-		apiKey = strings.Trim(apiKey, "[")
-		apiKey = strings.Trim(apiKey, "]")
+		accessToken := fmt.Sprintf("%s", r.Header["X-Api-Key"])
+		accessToken = strings.Trim(accessToken, "[")
+		accessToken = strings.Trim(accessToken, "]")
 
 		requestedRecordName := fmt.Sprintf("%s", r.Header["X-Domain"])
 		requestedRecordName = strings.Trim(requestedRecordName, "[")
@@ -331,7 +343,7 @@ func createRecordView(w http.ResponseWriter, r *http.Request) {
 		IPAddress = strings.Trim(IPAddress, "[")
 		IPAddress = strings.Trim(IPAddress, "]")
 
-		owner, err := getUserFromToken(apiKey)
+		owner, err := getUserFromToken(accessToken)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -361,6 +373,32 @@ func createRecordView(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func purgeCacheView(w http.ResponseWriter, r *http.Request) {
+	if isValidRequest(w, r) {
+		accessToken := fmt.Sprintf("%s", r.Header["X-Api-Key"])
+		accessToken = strings.Trim(accessToken, "[")
+		accessToken = strings.Trim(accessToken, "]")
+
+		requestedRecordName := fmt.Sprintf("%s", r.Header["X-Domain"])
+		requestedRecordName = strings.Trim(requestedRecordName, "[")
+		requestedRecordName = strings.Trim(requestedRecordName, "]")
+
+		record, err := getRecordFromFQDN(requestedRecordName)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		if isAllowed(accessToken, record) {
+			err := purgeCache(redisCacheChannelName, record)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
+
+		fmt.Fprintf(w, "Record cached from purge globally. Please allow up to 30 seconds for this to reflect.")
+	}
+}
+
 func main() {
 	cfg, err := ini.Load("config.ini")
 	if err != nil {
@@ -373,10 +411,39 @@ func main() {
 	dbPort, _ := cfg.Section("database").Key("port").Int()
 	dbName := cfg.Section("database").Key("database").String()
 
+	redisHost := cfg.Section("redis").Key("host").String()
+	redisPassword := cfg.Section("redis").Key("password").String()
+	redisDB, _ := cfg.Section("redis").Key("db").Int()
+	redisCacheChannelName = cfg.Section("redis").Key("cache_channel").String()
+
 	err = dbConnect(dbUser, dbPass, dbHost, dbPort, dbName)
 	if err != nil {
 		panic(err.Error())
 	}
+
+	redisClient = redis.NewClient(&redis.Options{
+		Addr:     redisHost,
+		Password: redisPassword,
+		DB:       redisDB,
+	})
+
+	go func() {
+		for {
+			_, err := redisClient.Ping().Result()
+			if err != nil {
+				fmt.Println("Redis is broken")
+			}
+			time.Sleep(time.Second)
+		}
+	}()
+
+	go func() {
+		redisCacheChannel = redisClient.Subscribe(redisCacheChannelName)
+		_, err := redisCacheChannel.Receive()
+		if err != nil {
+			panic(err)
+		}
+	}()
 
 	go func() {
 		r := http.NewServeMux()
@@ -394,6 +461,7 @@ func main() {
 	go func() {
 		router := mux.NewRouter().StrictSlash(true)
 		router.HandleFunc("/", indexView)
+		router.HandleFunc("/cache/purge", purgeCacheView)
 		router.HandleFunc("/record/update", updateRecordView)
 		router.HandleFunc("/record/create", createRecordView)
 		log.Fatal(http.ListenAndServe(":8080", router))
