@@ -1,6 +1,7 @@
 //To-Do:
 // - Prometheus stats
 // - debug logging
+// - on record create, check for record existence
 
 package main
 
@@ -44,6 +45,15 @@ type Domain struct {
 type User struct {
 	ID   int
 	Name string
+}
+
+type requestRecord struct {
+	FQDN      string
+	IPAddress string
+}
+
+type FQDN struct {
+	FQDN string
 }
 
 var dbConn sql.DB
@@ -117,6 +127,25 @@ func updateRecord(dbConn *sql.DB, record Record, newIPAddress string) error {
 	defer dq.Close()
 
 	_, err = dq.Exec(newIPAddress, record.ID)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func deleteRecord(dbConn *sql.DB, record Record) error {
+	query := "DELETE FROM dns_record WHERE id = ?"
+	dq, err := dbConn.Prepare(query)
+
+	if err != nil {
+		return err
+	}
+
+	defer dq.Close()
+
+	_, err = dq.Exec(record.ID)
 
 	if err != nil {
 		return err
@@ -278,46 +307,34 @@ func updateRecordView(w http.ResponseWriter, r *http.Request) {
 		apiKey = strings.Trim(apiKey, "[")
 		apiKey = strings.Trim(apiKey, "]")
 
-		requestedRecordName := fmt.Sprintf("%s", r.Header["X-Domain"])
-		requestedRecordName = strings.Trim(requestedRecordName, "[")
-		requestedRecordName = strings.Trim(requestedRecordName, "]")
+		var reqRecord requestRecord
+		switch r.Method {
+		case "GET":
+			fmt.Println("should redirect to index on GET request")
+		case "POST":
+			decoder := json.NewDecoder(r.Body)
 
-		// Allow for an optional X-IP-Address field
-		// if provided, the record is changed to the value of this header
-		// if not provided, ip_address is assumed to be that of the request (RemoteAddr)
+			err := decoder.Decode(&reqRecord)
 
-		var newIPAddress string
-
-		for k, _ := range r.Header {
-			if k == "X-Ip-Address" {
-				newIPAddress = fmt.Sprintf("%s", r.Header["X-Ip-Address"])
-			}
-		}
-
-		// if newIPAddress hasnt been set by now, implied we
-		// are taking the IP from the RemoteAddr field
-		if newIPAddress == "" {
-			newIPAddress = r.RemoteAddr
-			// If a port snuck into the ip address from RemoteAddr -- remove it
-			if strings.ContainsAny(newIPAddress, ":") {
-				newIPAddress = strings.Split(newIPAddress, ":")[0]
-			}
-		}
-
-		newIPAddress = strings.Trim(newIPAddress, "[")
-		newIPAddress = strings.Trim(newIPAddress, "]")
-
-		record, err := getRecordFromFQDN(requestedRecordName)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		fmt.Println(r.RemoteAddr)
-
-		if isAllowed(apiKey, record) {
-			err := updateRecord(&dbConn, record, newIPAddress)
 			if err != nil {
-				fmt.Fprintf(w, "Record was updated successfully: %s", newIPAddress)
+				log.Fatal(err)
+			}
+
+			record, err := getRecordFromFQDN(reqRecord.FQDN)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			if isAllowed(apiKey, record) {
+				err := updateRecord(&dbConn, record, reqRecord.IPAddress)
+				if err != nil {
+					log.Fatal(err)
+				}
+				fmt.Fprintf(w, "Record was updated successfully")
+
+			} else {
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte("403 - Forbidden"))
 			}
 		}
 	}
@@ -330,56 +347,86 @@ func createRecordView(w http.ResponseWriter, r *http.Request) {
 		accessToken = strings.Trim(accessToken, "[")
 		accessToken = strings.Trim(accessToken, "]")
 
-		requestedRecordName := fmt.Sprintf("%s", r.Header["X-Domain"])
-		requestedRecordName = strings.Trim(requestedRecordName, "[")
-		requestedRecordName = strings.Trim(requestedRecordName, "]")
+		var reqRecord requestRecord
 
-		var IPAddress string
+		switch r.Method {
+		case "GET":
+			fmt.Println("should redirect to index on GET request")
+		case "POST":
+			decoder := json.NewDecoder(r.Body)
 
-		for k, _ := range r.Header {
-			if k == "X-Ip-Address" {
-				IPAddress = fmt.Sprintf("%s", r.Header["X-Ip-Address"])
+			err := decoder.Decode(&reqRecord)
+
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			owner, err := getUserFromToken(accessToken)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			recordName := strings.Split(reqRecord.FQDN, ".")[0]
+			domainName := strings.Join(strings.Split(reqRecord.FQDN, ".")[1:], ".")
+
+			domain, err := getDomainFromName(domainName)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			record := Record{
+				Name:     recordName,
+				IP:       reqRecord.IPAddress,
+				TTL:      30,
+				DOB:      time.Now(),
+				DomainID: domain.ID,
+				OwnerID:  owner.ID,
+			}
+
+			err = createRecord(&dbConn, record)
+			if err != nil {
+				log.Fatal(err)
+			}
+			fmt.Fprintf(w, "Record was created successfully: %s", reqRecord.FQDN)
+		}
+	}
+}
+
+func deleteRecordView(w http.ResponseWriter, r *http.Request) {
+	if isValidRequest(w, r) {
+		accessToken := fmt.Sprintf("%s", r.Header["X-Api-Key"])
+		accessToken = strings.Trim(accessToken, "[")
+		accessToken = strings.Trim(accessToken, "]")
+
+		var reqRecord FQDN
+
+		switch r.Method {
+		case "GET":
+			fmt.Println("should redirect to index on GET request")
+		case "POST":
+			decoder := json.NewDecoder(r.Body)
+
+			err := decoder.Decode(&reqRecord)
+
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			record, err := getRecordFromFQDN(reqRecord.FQDN)
+
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			if isAllowed(accessToken, record) {
+				err = deleteRecord(&dbConn, record)
+				if err != nil {
+					log.Fatal(err)
+				}
+				fmt.Fprintf(w, "Record was deleted successfully")
 			}
 		}
 
-		if IPAddress == "" {
-			IPAddress = r.RemoteAddr
-
-			if strings.ContainsAny(IPAddress, ":") {
-				IPAddress = strings.Split(IPAddress, ":")[0]
-			}
-		}
-
-		IPAddress = strings.Trim(IPAddress, "[")
-		IPAddress = strings.Trim(IPAddress, "]")
-
-		owner, err := getUserFromToken(accessToken)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		recordName := strings.Split(requestedRecordName, ".")[0]
-		domainName := strings.Join(strings.Split(requestedRecordName, ".")[1:], ".")
-		domain, err := getDomainFromName(domainName)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		record := Record{
-			Name:     recordName,
-			IP:       IPAddress,
-			TTL:      30,
-			DOB:      time.Now(),
-			DomainID: domain.ID,
-			OwnerID:  owner.ID,
-		}
-
-		err = createRecord(&dbConn, record)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		fmt.Fprintf(w, "Record was created successfully: %s.%s", recordName, domain.Name)
 	}
 }
 
@@ -389,23 +436,34 @@ func purgeCacheView(w http.ResponseWriter, r *http.Request) {
 		accessToken = strings.Trim(accessToken, "[")
 		accessToken = strings.Trim(accessToken, "]")
 
-		requestedRecordName := fmt.Sprintf("%s", r.Header["X-Domain"])
-		requestedRecordName = strings.Trim(requestedRecordName, "[")
-		requestedRecordName = strings.Trim(requestedRecordName, "]")
+		var reqRecord FQDN
 
-		record, err := getRecordFromFQDN(requestedRecordName)
-		if err != nil {
-			log.Fatal(err)
-		}
+		switch r.Method {
+		case "GET":
+			fmt.Println("should redirect to index on GET request")
+		case "POST":
+			decoder := json.NewDecoder(r.Body)
 
-		if isAllowed(accessToken, record) {
-			err := purgeCache(redisCacheChannelName, record)
+			err := decoder.Decode(&reqRecord)
+
 			if err != nil {
 				log.Fatal(err)
 			}
-		}
 
-		fmt.Fprintf(w, "Record cached from purge globally. Please allow up to 30 seconds for this to reflect.")
+			record, err := getRecordFromFQDN(reqRecord.FQDN)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			if isAllowed(accessToken, record) {
+				err := purgeCache(redisCacheChannelName, record)
+				if err != nil {
+					log.Fatal(err)
+				}
+			}
+
+			fmt.Fprintf(w, "Record cached from purge globally. Please allow up to 30 seconds for this to reflect.")
+		}
 	}
 }
 
@@ -472,8 +530,9 @@ func main() {
 		router := mux.NewRouter().StrictSlash(true)
 		router.HandleFunc("/", indexView)
 		router.HandleFunc("/cache/purge", purgeCacheView)
-		router.HandleFunc("/record/update", updateRecordView)
 		router.HandleFunc("/record/create", createRecordView)
+		router.HandleFunc("/record/update", updateRecordView)
+		router.HandleFunc("/record/delete", deleteRecordView)
 		log.Fatal(http.ListenAndServe(":8080", router))
 	}()
 
