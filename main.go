@@ -195,7 +195,7 @@ func getUserFromToken(accessToken string) (User, error) {
 	var isAdmin int
 	var isStaff int
 
-	query := "SELECT id, username, is_superuser, is_staff FROM auth_user LEFT JOIN authtoken_token ON auth_user.id = authtoken_token.user_id WHERE authtoken_token.key = ?"
+	query := "SELECT auth_user.id, auth_user.username, auth_user.is_superuser, auth_user.is_staff FROM auth_user INNER JOIN authtoken_token ON auth_user.id = authtoken_token.user_id WHERE authtoken_token.key = ?"
 
 	dq, err := dbConn.Prepare(query)
 
