@@ -2,13 +2,28 @@
 This is the API service for lsof.top - its written in Go.
 
 ## Endpoints
-- `/cache/purge`
-  - This purges the cache record in question
+- `/cache`
+  - `/cache/record`
+    - Per-record management in the cache
+    - `/cache/record/purge`
+      - `DELETE` method
+  - `/cache/purge` (Admin/Staff only)
+    - Management of all cache records
+- `/domain` (Admin/Staff only)
+  - `/domain/create`
+    - Create a domain
+  - `/domain/delete`
+    - `DELETE` method
+    - Delete a domain
 - `/record`
   - `/record/create`
     - Create a record
   - `/record/update`
     - Update a record
+  - `/record/delete`
+    - `DELETE` method
+    - Delete a record
+
 
 # Quickstart
 ```

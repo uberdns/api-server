@@ -43,8 +43,10 @@ type Domain struct {
 }
 
 type User struct {
-	ID   int
-	Name string
+	ID    int
+	Name  string
+	Admin bool
+	Staff bool
 }
 
 type requestRecord struct {
@@ -154,10 +156,46 @@ func deleteRecord(dbConn *sql.DB, record Record) error {
 	return nil
 }
 
+func createDomain(dbConn *sql.DB, domain Domain) error {
+	query := "INSERT INTO dns_domain (name, created_on) VALUES (?, ?)"
+	dq, err := dbConn.Prepare(query)
+	if err != nil {
+		return err
+	}
+
+	defer dq.Close()
+
+	_, err = dq.Exec(domain.Name, time.Now())
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func deleteDomain(dbConn *sql.DB, domain Domain) error {
+	query := "DELETE FROM dns_domain WHERE id = ?"
+	dq, err := dbConn.Prepare(query)
+	if err != nil {
+		return err
+	}
+
+	defer dq.Close()
+
+	_, err = dq.Exec(domain.ID)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func getUserFromToken(accessToken string) (User, error) {
 	var user User
+	var isAdmin int
+	var isStaff int
 
-	query := "SELECT id, username FROM auth_user LEFT JOIN authtoken_token ON auth_user.id = authtoken_token.user_id WHERE authtoken_token.key = ?"
+	query := "SELECT id, username, is_superuser, is_staff FROM auth_user LEFT JOIN authtoken_token ON auth_user.id = authtoken_token.user_id WHERE authtoken_token.key = ?"
 
 	dq, err := dbConn.Prepare(query)
 
@@ -167,7 +205,7 @@ func getUserFromToken(accessToken string) (User, error) {
 
 	defer dq.Close()
 
-	err = dq.QueryRow(accessToken).Scan(&user.ID, &user.Name)
+	err = dq.QueryRow(accessToken).Scan(&user.ID, &user.Name, &isAdmin, &isStaff)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			fmt.Println("Unable to find user with provided API token.")
@@ -175,6 +213,18 @@ func getUserFromToken(accessToken string) (User, error) {
 		} else {
 			log.Fatal(err)
 		}
+	}
+
+	if isAdmin == 1 {
+		user.Admin = true
+	} else {
+		user.Admin = false
+	}
+
+	if isStaff == 1 {
+		user.Staff = true
+	} else {
+		user.Staff = false
 	}
 
 	return user, nil
@@ -403,7 +453,7 @@ func deleteRecordView(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case "GET":
 			fmt.Println("should redirect to index on GET request")
-		case "POST":
+		case "DELETE":
 			decoder := json.NewDecoder(r.Body)
 
 			err := decoder.Decode(&reqRecord)
@@ -436,6 +486,44 @@ func purgeCacheView(w http.ResponseWriter, r *http.Request) {
 		accessToken = strings.Trim(accessToken, "[")
 		accessToken = strings.Trim(accessToken, "]")
 
+		user, err := getUserFromToken(accessToken)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// Only admin + staff can purge the entire cache
+		if !user.Admin && !user.Staff {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("403 - Forbidden"))
+		}
+
+		var reqRecord FQDN
+
+		switch r.Method {
+		case "GET":
+			fmt.Println("should redirect to index on GET request")
+		case "POST":
+			decoder := json.NewDecoder(r.Body)
+
+			err := decoder.Decode(&reqRecord)
+
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			fmt.Println("To-Do: create redis message to clean all known records from cache")
+
+			fmt.Fprintf(w, "Record cached from purge globally. Please allow up to 30 seconds for this to reflect.")
+		}
+	}
+}
+
+func purgeCacheRecordView(w http.ResponseWriter, r *http.Request) {
+	if isValidRequest(w, r) {
+		accessToken := fmt.Sprintf("%s", r.Header["X-Api-Key"])
+		accessToken = strings.Trim(accessToken, "[")
+		accessToken = strings.Trim(accessToken, "]")
+
 		var reqRecord FQDN
 
 		switch r.Method {
@@ -463,6 +551,110 @@ func purgeCacheView(w http.ResponseWriter, r *http.Request) {
 			}
 
 			fmt.Fprintf(w, "Record cached from purge globally. Please allow up to 30 seconds for this to reflect.")
+		}
+	}
+}
+
+// To-do: Check for existing records
+func createDomainView(w http.ResponseWriter, r *http.Request) {
+	if isValidRequest(w, r) {
+		accessToken := fmt.Sprintf("%s", r.Header["X-Api-Key"])
+		accessToken = strings.Trim(accessToken, "[")
+		accessToken = strings.Trim(accessToken, "]")
+
+		user, err := getUserFromToken(accessToken)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// if requesting user is not an admin or staff, forbid access
+		if !user.Admin {
+			if !user.Staff {
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte("403 - Forbidden"))
+			}
+		}
+
+		type reqDomain struct {
+			Name string
+		}
+
+		var requestDomain reqDomain
+
+		switch r.Method {
+		case "GET":
+			fmt.Println("should redirect to index on GET request")
+		case "POST":
+			decoder := json.NewDecoder(r.Body)
+
+			err := decoder.Decode(&requestDomain)
+
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			domain := Domain{
+				Name: requestDomain.Name,
+			}
+
+			err = createDomain(&dbConn, domain)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			fmt.Fprintf(w, "Domain was created successfully: %s", domain.Name)
+		}
+	}
+}
+
+func deleteDomainView(w http.ResponseWriter, r *http.Request) {
+	if isValidRequest(w, r) {
+		accessToken := fmt.Sprintf("%s", r.Header["X-Api-Key"])
+		accessToken = strings.Trim(accessToken, "[")
+		accessToken = strings.Trim(accessToken, "]")
+
+		user, err := getUserFromToken(accessToken)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// if requesting user is not an admin or staff, forbid access
+		if !user.Admin {
+			if !user.Staff {
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte("403 - Forbidden"))
+			}
+		}
+
+		type requestDomain struct {
+			Name string
+		}
+
+		var reqDomain requestDomain
+
+		switch r.Method {
+		case "GET":
+			fmt.Println("should redirect to index on GET request")
+		case "DELETE":
+			decoder := json.NewDecoder(r.Body)
+
+			err := decoder.Decode(&reqDomain)
+
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			domain, err := getDomainFromName(reqDomain.Name)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			err = deleteDomain(&dbConn, domain)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			fmt.Fprintf(w, "Domain was deleted successfully")
 		}
 	}
 }
@@ -530,6 +722,9 @@ func main() {
 		router := mux.NewRouter().StrictSlash(true)
 		router.HandleFunc("/", indexView)
 		router.HandleFunc("/cache/purge", purgeCacheView)
+		router.HandleFunc("/cache/record/purge", purgeCacheRecordView)
+		router.HandleFunc("/domain/create", createDomainView)
+		router.HandleFunc("/domain/delete", deleteDomainView)
 		router.HandleFunc("/record/create", createRecordView)
 		router.HandleFunc("/record/update", updateRecordView)
 		router.HandleFunc("/record/delete", deleteRecordView)
