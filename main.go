@@ -36,12 +36,14 @@ type Record struct {
 	OwnerID  int
 }
 
+// Domain -- struct for storing information regarding domains
 type Domain struct {
 	ID        int
 	Name      string
 	CreatedOn time.Time
 }
 
+// User -- struct for storing information regarding a user performing a query
 type User struct {
 	ID    int
 	Name  string
@@ -49,13 +51,18 @@ type User struct {
 	Staff bool
 }
 
-type requestRecord struct {
-	FQDN      string
-	IPAddress string
+// CacheControlMessage -- struct for storing/parsing redis cache control messages
+//  					  to the dns server
+type CacheControlMessage struct {
+	Action string
+	Type   string
+	Object string
 }
 
-type FQDN struct {
-	FQDN string
+// requestRecord -- struct for storing information regarding a received api request
+type requestRecord struct {
+	Name      string
+	IPAddress string
 }
 
 var dbConn sql.DB
@@ -69,8 +76,6 @@ func dbConnect(username string, password string, host string, port int, database
 	if err != nil {
 		return err
 	}
-
-	//defer dbc.Close()
 
 	err = dbc.Ping()
 	if err != nil {
@@ -86,7 +91,7 @@ func isValidRequest(w http.ResponseWriter, r *http.Request) bool {
 
 	// Iterate over keylist of headers and make sure
 	// our required headers are present.
-	for k, _ := range r.Header {
+	for k := range r.Header {
 		if k == "X-Api-Key" {
 			valid = true
 		}
@@ -167,6 +172,7 @@ func createDomain(dbConn *sql.DB, domain Domain) error {
 
 	_, err = dq.Exec(domain.Name, time.Now())
 	if err != nil {
+		fmt.Println(err)
 		return err
 	}
 
@@ -208,11 +214,9 @@ func getUserFromToken(accessToken string) (User, error) {
 	err = dq.QueryRow(accessToken).Scan(&user.ID, &user.Name, &isAdmin, &isStaff)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			fmt.Println("Unable to find user with provided API token.")
-			return User{}, err
-		} else {
-			log.Fatal(err)
+			return User{}, nil
 		}
+		log.Fatal(err)
 	}
 
 	if isAdmin == 1 {
@@ -247,9 +251,8 @@ func getDomainFromName(domainName string) (Domain, error) {
 		if err == sql.ErrNoRows {
 			fmt.Println("Unable to find domain with provided domain name: ", domainName)
 			return Domain{}, nil
-		} else {
-			log.Fatal(err)
 		}
+		log.Fatal(err)
 	}
 
 	return domain, nil
@@ -272,9 +275,8 @@ func getDomainFromID(domainID int) (Domain, error) {
 		if err == sql.ErrNoRows {
 			fmt.Println("Unable to find domain with provided domain id: ", domainID)
 			return Domain{}, nil
-		} else {
-			log.Fatal(err)
 		}
+		log.Fatal(err)
 	}
 
 	return domain, nil
@@ -307,9 +309,8 @@ func getRecordFromFQDN(fqdn string) (Record, error) {
 		if err == sql.ErrNoRows {
 			fmt.Println("Unable to find record with that FQDN.")
 			return Record{}, nil
-		} else {
-			log.Fatal(err)
 		}
+		log.Fatal(err)
 	}
 
 	return record, nil
@@ -330,18 +331,39 @@ func isAllowed(accessToken string, record Record) bool {
 	return false
 }
 
-func purgeCache(cacheChannel string, record Record) error {
-
+func recordCacheMsgHandler(cacheChannel string, action string, record Record) error {
 	recordJSON, err := json.Marshal(record)
 	if err != nil {
 		return err
 	}
 
-	err = redisClient.Publish(cacheChannel, recordJSON).Err()
+	var cacheMsg CacheControlMessage
+
+	// action could be passed directly but sometimes im dumb and forget
+	// what action names i set...this helps keep my stupidity from far reach
+	switch action {
+	case "create", "purge", "update":
+		cacheMsg = CacheControlMessage{
+			Action: action,
+			Type:   "record",
+			Object: string(recordJSON),
+		}
+	default:
+		log.Fatalf("Improper action provided to cache handler: %s", action)
+	}
+
+	msgJSON, err := json.Marshal(cacheMsg)
 	if err != nil {
 		return err
 	}
+
+	err = redisClient.Publish(cacheChannel, msgJSON).Err()
+	if err != nil {
+		log.Println("Unable to publish cache message")
+		return err
+	}
 	return nil
+
 }
 
 func indexView(w http.ResponseWriter, r *http.Request) {
@@ -370,7 +392,7 @@ func updateRecordView(w http.ResponseWriter, r *http.Request) {
 				log.Fatal(err)
 			}
 
-			record, err := getRecordFromFQDN(reqRecord.FQDN)
+			record, err := getRecordFromFQDN(reqRecord.Name)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -381,6 +403,10 @@ func updateRecordView(w http.ResponseWriter, r *http.Request) {
 					log.Fatal(err)
 				}
 				fmt.Fprintf(w, "Record was updated successfully")
+				err = recordCacheMsgHandler(redisCacheChannelName, "update", record)
+				if err != nil {
+					log.Printf(err.Error())
+				}
 
 			} else {
 				w.WriteHeader(http.StatusForbidden)
@@ -415,9 +441,15 @@ func createRecordView(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				log.Fatal(err)
 			}
+			if (User{}) == owner {
+				// Empty user returned from token lookup - implied user not found
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte("403 - Forbidden"))
+				return
+			}
 
-			recordName := strings.Split(reqRecord.FQDN, ".")[0]
-			domainName := strings.Join(strings.Split(reqRecord.FQDN, ".")[1:], ".")
+			recordName := strings.Split(reqRecord.Name, ".")[0]
+			domainName := strings.Join(strings.Split(reqRecord.Name, ".")[1:], ".")
 
 			domain, err := getDomainFromName(domainName)
 			if err != nil {
@@ -437,8 +469,15 @@ func createRecordView(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				log.Fatal(err)
 			}
-			fmt.Fprintf(w, "Record was created successfully: %s", reqRecord.FQDN)
+			fmt.Fprintf(w, "Record was created successfully: %s", reqRecord.Name)
+			err = recordCacheMsgHandler(redisCacheChannelName, "create", record)
+			if err != nil {
+				fmt.Printf("Unable to populate cache with record %s", record.Name)
+			}
+			fmt.Println(record)
 		}
+	} else {
+		fmt.Println("invalid request")
 	}
 }
 
@@ -448,7 +487,7 @@ func deleteRecordView(w http.ResponseWriter, r *http.Request) {
 		accessToken = strings.Trim(accessToken, "[")
 		accessToken = strings.Trim(accessToken, "]")
 
-		var reqRecord FQDN
+		var reqRecord requestRecord
 
 		switch r.Method {
 		case "GET":
@@ -462,7 +501,7 @@ func deleteRecordView(w http.ResponseWriter, r *http.Request) {
 				log.Fatal(err)
 			}
 
-			record, err := getRecordFromFQDN(reqRecord.FQDN)
+			record, err := getRecordFromFQDN(reqRecord.Name)
 
 			if err != nil {
 				log.Fatal(err)
@@ -474,6 +513,10 @@ func deleteRecordView(w http.ResponseWriter, r *http.Request) {
 					log.Fatal(err)
 				}
 				fmt.Fprintf(w, "Record was deleted successfully")
+				err = recordCacheMsgHandler(redisCacheChannelName, "purge", record)
+				if err != nil {
+					fmt.Printf("Unable to purge cache of record %s", record.Name)
+				}
 			}
 		}
 
@@ -490,11 +533,22 @@ func purgeCacheView(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Fatal(err)
 		}
+		if (User{}) == user {
+			// Empty user returned from token lookup - implied user not found
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("403 - Forbidden"))
+			return
+		}
 
 		// Only admin + staff can purge the entire cache
 		if !user.Admin && !user.Staff {
 			w.WriteHeader(http.StatusForbidden)
 			w.Write([]byte("403 - Forbidden"))
+			return
+		}
+
+		type FQDN struct {
+			FQDN string
 		}
 
 		var reqRecord FQDN
@@ -524,6 +578,9 @@ func purgeCacheRecordView(w http.ResponseWriter, r *http.Request) {
 		accessToken = strings.Trim(accessToken, "[")
 		accessToken = strings.Trim(accessToken, "]")
 
+		type FQDN struct {
+			FQDN string
+		}
 		var reqRecord FQDN
 
 		switch r.Method {
@@ -544,7 +601,7 @@ func purgeCacheRecordView(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if isAllowed(accessToken, record) {
-				err := purgeCache(redisCacheChannelName, record)
+				err := recordCacheMsgHandler(redisCacheChannelName, "purge", record)
 				if err != nil {
 					log.Fatal(err)
 				}
@@ -566,13 +623,19 @@ func createDomainView(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Fatal(err)
 		}
+		if (User{}) == user {
+			// Empty user returned from token lookup - implied user not found
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("403 - Forbidden"))
+			return
+		}
 
 		// if requesting user is not an admin or staff, forbid access
-		if !user.Admin {
-			if !user.Staff {
-				w.WriteHeader(http.StatusForbidden)
-				w.Write([]byte("403 - Forbidden"))
-			}
+		if !user.Admin && !user.Staff {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("403 - Forbidden"))
+			return
+
 		}
 
 		type reqDomain struct {
@@ -617,13 +680,18 @@ func deleteDomainView(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Fatal(err)
 		}
+		if (User{}) == user {
+			// Empty user returned from token lookup - implied user not found
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("403 - Forbidden"))
+			return
+		}
 
 		// if requesting user is not an admin or staff, forbid access
-		if !user.Admin {
-			if !user.Staff {
-				w.WriteHeader(http.StatusForbidden)
-				w.Write([]byte("403 - Forbidden"))
-			}
+		if !user.Admin && !user.Staff {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("403 - Forbidden"))
+			return
 		}
 
 		type requestDomain struct {
