@@ -31,7 +31,7 @@ type Record struct {
 	Name     string
 	IP       string
 	TTL      int64 //TTL for caching
-	DOB      time.Time
+	Created  time.Time
 	DomainID int
 	OwnerID  int
 }
@@ -114,7 +114,7 @@ func createRecord(dbConn *sql.DB, record Record) error {
 
 	defer dq.Close()
 
-	_, err = dq.Exec(record.Name, record.IP, record.TTL, record.DOB, record.DomainID, record.OwnerID)
+	_, err = dq.Exec(record.Name, record.IP, record.TTL, record.Created, record.DomainID, record.OwnerID)
 	if err != nil {
 		return err
 	}
@@ -304,7 +304,7 @@ func getRecordFromFQDN(fqdn string) (Record, error) {
 
 	defer dq.Close()
 
-	err = dq.QueryRow(recordName, domain.ID).Scan(&record.ID, &record.Name, &record.IP, &record.TTL, &record.DOB, &record.OwnerID)
+	err = dq.QueryRow(recordName, domain.ID).Scan(&record.ID, &record.Name, &record.IP, &record.TTL, &record.Created, &record.OwnerID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			fmt.Println("Unable to find record with that FQDN.")
@@ -460,13 +460,21 @@ func createRecordView(w http.ResponseWriter, r *http.Request) {
 				Name:     recordName,
 				IP:       reqRecord.IPAddress,
 				TTL:      30,
-				DOB:      time.Now(),
+				Created:  time.Now(),
 				DomainID: domain.ID,
 				OwnerID:  owner.ID,
 			}
 
 			err = createRecord(&dbConn, record)
 			if err != nil {
+				log.Fatal(err)
+			}
+			// Perform SQL Query after creating the record to pull autoincrement values
+			// this is kinda clunky...but its on the api server so im not super worried...
+			// this might be worthy of refactoring at some point for brownie points
+			record, err = getRecordFromFQDN(reqRecord.Name)
+			if err != nil {
+				fmt.Println("problem querying database after creating record successfully")
 				log.Fatal(err)
 			}
 			fmt.Fprintf(w, "Record was created successfully: %s", reqRecord.Name)
@@ -783,7 +791,7 @@ func main() {
 		r.Handle("/debug/pprof/heap", pprof.Handler("heap"))
 		r.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
 
-		http.ListenAndServe(":6060", r)
+		http.ListenAndServe(":6061", r)
 	}()
 
 	go func() {
