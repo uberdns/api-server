@@ -105,20 +105,37 @@ func isValidRequest(w http.ResponseWriter, r *http.Request) bool {
 	return valid
 }
 
+func recordExists(dbConn *sql.DB, record Record) bool {
+	var ret int
+	query := "SELECT COUNT(*) FROM dns_record WHERE name = ? and domain_id = ?"
+	err := dbConn.QueryRow(query, record.Name, record.DomainID).Scan(&ret)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if ret > 0 {
+		return true
+	}
+	return false
+}
+
 func createRecord(dbConn *sql.DB, record Record) error {
-	query := "INSERT INTO dns_record (name, ip_address, ttl, created_on, domain_id, owner_id) VALUES (?, ?, ?,  ?, ?, ?)"
-	dq, err := dbConn.Prepare(query)
-	if err != nil {
-		return err
+	if !recordExists(dbConn, record) {
+		query := "INSERT INTO dns_record (name, ip_address, ttl, created_on, domain_id, owner_id) VALUES (?, ?, ?,  ?, ?, ?)"
+		dq, err := dbConn.Prepare(query)
+		if err != nil {
+			return err
+		}
+
+		defer dq.Close()
+
+		_, err = dq.Exec(record.Name, record.IP, record.TTL, record.Created, record.DomainID, record.OwnerID)
+		if err != nil {
+			return err
+		}
+		return nil
 	}
-
-	defer dq.Close()
-
-	_, err = dq.Exec(record.Name, record.IP, record.TTL, record.Created, record.DomainID, record.OwnerID)
-	if err != nil {
-		return err
-	}
-
 	return nil
 
 }
