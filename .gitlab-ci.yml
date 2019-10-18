@@ -1,0 +1,61 @@
+stages:
+#  - test
+  - build
+
+#unit_tests:
+#  stage: test
+#  image: golang:1.13
+#  script:
+#    - make test
+
+#race_detector:
+#  stage: test
+#  image: golang:1.13
+#  script:
+#    - make race
+
+#memory_sanitizer:
+#  stage: test
+#  image: golang:1.13
+#  script:
+#    - echo "deb http://apt.llvm.org/buster llvm-toolchain-buster main" | tee -a /etc/apt/sources.list
+#    - apt-get --allow-unauthenticated update; apt-get install -y --no-install-recommends clang-6.0
+#    - CC=clang-6.0 make msan
+
+
+#code_coverage:
+#  stage: test
+#  image: golang:1.13
+#  script:
+#    - make coverage
+
+#code_coverage_report:
+#  stage: test
+#  image: golang:1.13
+#  script:
+#    - make coverhtml
+#  only:
+#  - master
+
+#lint_code:
+#  stage: test
+#  image: golang:1.13
+#  script:
+#    - make lint
+
+build:
+  stage: build
+  image: golang:1.13
+  before_script:
+    - apt update; apt install -y rpm
+    - wget https://github.com/goreleaser/goreleaser/releases/download/v0.118.0/goreleaser_amd64.deb && dpkg -i *.deb
+  script:
+    - make build
+  artifacts:
+    paths:
+      - dist/*
+  only:
+    - tags
+  except:
+    - branches
+    - master
