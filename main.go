@@ -6,6 +6,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -38,7 +39,10 @@ func isAllowed(accessToken string, record Record) bool {
 }
 
 func main() {
-	cfg, err := ini.Load("config.ini")
+	cfgFile := flag.String("config", "config.ini", "Path to the config file")
+	flag.Parse()
+
+	cfg, err := ini.Load(*cfgFile)
 	if err != nil {
 		panic(err.Error())
 	}
