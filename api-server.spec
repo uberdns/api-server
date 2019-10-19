@@ -17,10 +17,13 @@ go build -o api-server
 
 %install
 mkdir -p %{buildroot}/usr/local/bin
+mkdir -p %{buildroot}/etc/systemd/system
 install -m 755 api-server %{buildroot}/usr/local/bin/api-server
+install -m 755 api-server.service %{buildroot}/etc/systemd/system/api-server.service
 
 %files
 /usr/local/bin/api-server
+/etc/systemd/system/api-server.service
 
 %changelog
 # We will revisit
