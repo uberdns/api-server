@@ -17,6 +17,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/go-redis/redis"
 	"github.com/gorilla/mux"
@@ -58,6 +59,8 @@ func main() {
 	redisDB, _ := cfg.Section("redis").Key("db").Int()
 	redisCacheChannelName = cfg.Section("redis").Key("cache_channel").String()
 
+	prometheusPort := cfg.Section("api").Key("prometheus_port").String()
+
 	err = dbConnect(dbUser, dbPass, dbHost, dbPort, dbName)
 	if err != nil {
 		panic(err.Error())
@@ -98,6 +101,12 @@ func main() {
 		r.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
 
 		http.ListenAndServe(":6061", r)
+	}()
+
+	// Start prometheus metrics
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", prometheusPort), nil))
 	}()
 
 	go func() {
