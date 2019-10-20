@@ -60,6 +60,20 @@ func main() {
 	redisCacheChannelName = cfg.Section("redis").Key("cache_channel").String()
 
 	prometheusPort := cfg.Section("api").Key("prometheus_port").String()
+	pprofPort, _ := cfg.Section("api").Key("pprof_port").Int()
+
+	go func() {
+		r := http.NewServeMux()
+		r.HandleFunc("/debug/pprof/", pprof.Index)
+		r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		r.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		r.HandleFunc("/debug/pprof/trace", pprof.Trace)
+		r.Handle("/debug/pprof/heap", pprof.Handler("heap"))
+		r.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
+
+		http.ListenAndServe(fmt.Sprintf(":%d", pprofPort), r)
+	}()
 
 	err = dbConnect(dbUser, dbPass, dbHost, dbPort, dbName)
 	if err != nil {
@@ -88,19 +102,6 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-	}()
-
-	go func() {
-		r := http.NewServeMux()
-		r.HandleFunc("/debug/pprof/", pprof.Index)
-		r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
-		r.HandleFunc("/debug/pprof/profile", pprof.Profile)
-		r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
-		r.HandleFunc("/debug/pprof/trace", pprof.Trace)
-		r.Handle("/debug/pprof/heap", pprof.Handler("heap"))
-		r.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
-
-		http.ListenAndServe(":6061", r)
 	}()
 
 	// Start prometheus metrics
