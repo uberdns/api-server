@@ -59,6 +59,7 @@ func main() {
 	redisDB, _ := cfg.Section("redis").Key("db").Int()
 	redisCacheChannelName = cfg.Section("redis").Key("cache_channel").String()
 
+	apiPort := cfg.section("api").Key("api_port").String()
 	prometheusPort := cfg.Section("api").Key("prometheus_port").String()
 	pprofPort, _ := cfg.Section("api").Key("pprof_port").Int()
 
@@ -80,21 +81,7 @@ func main() {
 		panic(err.Error())
 	}
 
-	redisClient = redis.NewClient(&redis.Options{
-		Addr:     redisHost,
-		Password: redisPassword,
-		DB:       redisDB,
-	})
-
-	go func() {
-		for {
-			_, err := redisClient.Ping().Result()
-			if err != nil {
-				fmt.Println("Redis is broken")
-			}
-			time.Sleep(time.Second)
-		}
-	}()
+	redisClient = redisConnect(redisHost, redisPassword, redisDB)
 
 	go func() {
 		redisCacheChannel := redisClient.Subscribe(redisCacheChannelName)
@@ -103,6 +90,9 @@ func main() {
 			panic(err)
 		}
 	}()
+
+	domainChannel := make(chan CacheControlMessage)
+	go manageCacheChannel(domainChannel, redisClient, redisCacheChannelName)
 
 	// Start prometheus metrics
 	go func() {
@@ -122,7 +112,7 @@ func main() {
 		router.HandleFunc("/record/create", createRecordView)
 		router.HandleFunc("/record/update", updateRecordView)
 		router.HandleFunc("/record/delete", deleteRecordView)
-		log.Fatal(http.ListenAndServe(":8080", router))
+		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d",apiPort), router))
 	}()
 
 	sig := make(chan os.Signal)
