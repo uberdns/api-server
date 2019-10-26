@@ -121,10 +121,11 @@ func createRecordView(w http.ResponseWriter, r *http.Request) {
 				log.Fatal(err)
 			}
 			fmt.Fprintf(w, "Record was created successfully: %s", reqRecord.Name)
-			err = recordCacheMsgHandler(redisCacheChannelName, "create", record)
-			if err != nil {
-				fmt.Printf("Unable to populate cache with record %s", record.Name)
-			}
+			addRecordToCache(record, recordChannel)
+			//err = recordCacheMsgHandler(redisCacheChannelName, "create", record)
+			//if err != nil {
+			//	fmt.Printf("Unable to populate cache with record %s", record.Name)
+			//}
 			fmt.Println(record)
 		}
 	} else {
@@ -163,11 +164,7 @@ func deleteRecordView(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					log.Fatal(err)
 				}
-				fmt.Fprintf(w, "Record was deleted successfully")
-				err = recordCacheMsgHandler(redisCacheChannelName, "purge", record)
-				if err != nil {
-					fmt.Printf("Unable to purge cache of record %s", record.Name)
-				}
+				deleteRecordFromCache(record, recordChannel)
 			}
 		}
 
@@ -252,10 +249,7 @@ func purgeCacheRecordView(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if isAllowed(accessToken, record) {
-				err := recordCacheMsgHandler(redisCacheChannelName, "purge", record)
-				if err != nil {
-					log.Fatal(err)
-				}
+				deleteRecordFromCache(record, recordChannel)
 			}
 
 			fmt.Fprintf(w, "Record cached from purge globally. Please allow up to 30 seconds for this to reflect.")

@@ -14,12 +14,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/go-redis/redis"
 	"github.com/gorilla/mux"
 	"gopkg.in/ini.v1"
 )
@@ -38,6 +36,11 @@ func isAllowed(accessToken string, record Record) bool {
 
 	return false
 }
+
+var (
+	domainChannel chan CacheControlMessage
+	recordChannel chan CacheControlMessage
+)
 
 func main() {
 	cfgFile := flag.String("config", "config.ini", "Path to the config file")
@@ -59,7 +62,7 @@ func main() {
 	redisDB, _ := cfg.Section("redis").Key("db").Int()
 	redisCacheChannelName = cfg.Section("redis").Key("cache_channel").String()
 
-	apiPort := cfg.section("api").Key("api_port").String()
+	apiPort := cfg.Section("api").Key("api_port").String()
 	prometheusPort := cfg.Section("api").Key("prometheus_port").String()
 	pprofPort, _ := cfg.Section("api").Key("pprof_port").Int()
 
@@ -83,16 +86,17 @@ func main() {
 
 	redisClient = redisConnect(redisHost, redisPassword, redisDB)
 
-	go func() {
-		redisCacheChannel := redisClient.Subscribe(redisCacheChannelName)
-		_, err := redisCacheChannel.Receive()
-		if err != nil {
-			panic(err)
-		}
-	}()
+	// start subscribing to redis cache channel and begin receiving data
+	_, err = redisClient.Subscribe(redisCacheChannelName).Receive()
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	domainChannel := make(chan CacheControlMessage)
+	domainChannel = make(chan CacheControlMessage)
 	go manageCacheChannel(domainChannel, redisClient, redisCacheChannelName)
+
+	recordChannel = make(chan CacheControlMessage)
+	go manageCacheChannel(recordChannel, redisClient, redisCacheChannelName)
 
 	// Start prometheus metrics
 	go func() {
@@ -112,7 +116,7 @@ func main() {
 		router.HandleFunc("/record/create", createRecordView)
 		router.HandleFunc("/record/update", updateRecordView)
 		router.HandleFunc("/record/delete", deleteRecordView)
-		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d",apiPort), router))
+		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", apiPort), router))
 	}()
 
 	sig := make(chan os.Signal)

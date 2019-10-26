@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"testing"
-	"time"
 )
 
 var testRecord = Record{
@@ -13,33 +12,9 @@ var testRecord = Record{
 	Name:     "test",
 	IP:       "127.0.0.1",
 	TTL:      30,
-	DOB:      time.Now(),
 	DomainID: 1,
 	OwnerID:  1,
 }
-
-//func TestUpdateRecord(t *testing.T) {
-//	db, mock, err := sqlmock.New()
-//
-//	if err != nil {
-//		t.Fatalf("An error '%s' was not expected when opening a stub database connection.", err)
-//	}
-//
-//	defer db.Close()
-//
-//	//mock.ExpectBegin()
-//	mock.ExpectPrepare("UPDATE dns_record SET ip_address (.*)")
-//	//mock.ExpectCommit()
-//
-//	if err = updateRecord(db, testRecord, "127.0.0.2"); err != nil {
-//		t.Errorf("error was not expected updating record: %s", err)
-//	}
-//
-//	if err := mock.ExpectationsWereMet(); err != nil {
-//		t.Errorf("There were unfulfilled expectations: %s", err)
-//	}
-//
-//}
 
 // TestIsValidRequest - tests using indexView
 func TestIsValidRequest(t *testing.T) {

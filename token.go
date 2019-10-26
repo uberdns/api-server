@@ -41,7 +41,7 @@ func tokenIsValid(dbConn *sql.DB, token Token) bool {
 	hourPast := time.Now().AddDate(0, -1, 0)
 
 	if retToken.CreatedOn.Before(hourPast) {
-		fmt.Println("Token %s expired", token.Key)
+		fmt.Printf("Token %s expired", token.Key)
 		return false
 	}
 	return true

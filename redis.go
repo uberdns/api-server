@@ -1,9 +1,23 @@
 package main
 
-import "github.com/go-redis/redis"
+import (
+	"log"
+	"time"
+
+	"github.com/go-redis/redis"
+)
 
 var redisClient *redis.Client
 var redisCacheChannelName string
+
+func redisPublish(redisClient *redis.Client, redisChannel string, msg string) bool {
+	err := redisClient.Publish(redisChannel, msg).Err()
+	if err != nil {
+		log.Fatal(err)
+		return false
+	}
+	return true
+}
 
 func redisConnect(redisHost string, redisPassword string, redisDB int) *redis.Client {
 	redisClient := redis.NewClient(&redis.Options{
@@ -19,10 +33,10 @@ func redisConnect(redisHost string, redisPassword string, redisDB int) *redis.Cl
 			defer ticker.Stop()
 
 			for range ticker.C {
-			    _, err := redisClient.Ping().Result()
-			    if err != nil {
-			        log.Println("[REDIS] Unable to communicate with " + redisHost)
-			    }
+				_, err := redisClient.Ping().Result()
+				if err != nil {
+					log.Println("[REDIS] Unable to communicate with " + redisHost)
+				}
 			}
 
 		}

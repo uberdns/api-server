@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"log"
+
+	"github.com/go-redis/redis"
 )
 
 // CacheControlMessage -- struct for storing/parsing redis cache control messages
@@ -21,9 +23,8 @@ func manageCacheChannel(channel <-chan CacheControlMessage, redisClient *redis.C
 			if err != nil {
 				log.Fatal(err)
 			}
-			err = redisClient.Publish(redisChannel, msgJSON).Err()
-			if err != nil {
-				log.Fatal(err)
+			if !redisPublish(redisClient, redisChannel, string(msgJSON)) {
+				log.Fatalf("Could not publish message to Redis")
 			}
 		}
 	}
@@ -32,7 +33,7 @@ func manageCacheChannel(channel <-chan CacheControlMessage, redisClient *redis.C
 func addDomainToCache(domain Domain, channel chan<- CacheControlMessage) {
 	jsonMSG, err := json.Marshal(domain)
 	if err != nil {
-		fmt.Fatal(err)
+		log.Fatal(err)
 	}
 	msg := CacheControlMessage{
 		Action: "create",
@@ -46,7 +47,7 @@ func addDomainToCache(domain Domain, channel chan<- CacheControlMessage) {
 func deleteDomainFromCache(domain Domain, channel chan<- CacheControlMessage) {
 	jsonMSG, err := json.Marshal(domain)
 	if err != nil {
-		fmt.Fatal(err)
+		log.Fatal(err)
 	}
 	msg := CacheControlMessage{
 		Action: "purge",
@@ -56,6 +57,34 @@ func deleteDomainFromCache(domain Domain, channel chan<- CacheControlMessage) {
 	channel <- msg
 	return
 
+}
+
+func addRecordToCache(record Record, channel chan<- CacheControlMessage) {
+	jsonMSG, err := json.Marshal(record)
+	if err != nil {
+		log.Fatal(err)
+	}
+	msg := CacheControlMessage{
+		Action: "create",
+		Type:   "record",
+		Object: string(jsonMSG),
+	}
+	channel <- msg
+	return
+}
+
+func deleteRecordFromCache(record Record, channel chan<- CacheControlMessage) {
+	jsonMSG, err := json.Marshal(record)
+	if err != nil {
+		log.Fatal(err)
+	}
+	msg := CacheControlMessage{
+		Action: "purge",
+		Type:   "record",
+		Object: string(jsonMSG),
+	}
+	channel <- msg
+	return
 }
 
 func recordCacheMsgHandler(cacheChannel string, action string, record Record) error {
