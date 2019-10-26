@@ -1,11 +1,23 @@
 package main
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+	"strings"
+)
 
 // requestRecord -- struct for storing information regarding a received api request
 type requestRecord struct {
 	Name      string
 	IPAddress string
+}
+
+func getAPIKey(r *http.Request) string {
+	accessToken := fmt.Sprintf("%s", r.Header["X-Api-Key"])
+	accessToken = strings.Trim(accessToken, "[")
+	accessToken = strings.Trim(accessToken, "]")
+
+	return accessToken
 }
 
 func isValidRequest(w http.ResponseWriter, r *http.Request) bool {

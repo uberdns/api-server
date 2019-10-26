@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 )
 
@@ -13,8 +14,7 @@ type User struct {
 	Staff bool
 }
 
-func getUserFromToken(accessToken string) (User, error) {
-	var user User
+func (u *User) LookupFromAPIKey(apiKey string) {
 	var isAdmin int
 	var isStaff int
 
@@ -28,25 +28,26 @@ func getUserFromToken(accessToken string) (User, error) {
 
 	defer dq.Close()
 
-	err = dq.QueryRow(accessToken).Scan(&user.ID, &user.Name, &isAdmin, &isStaff)
+	err = dq.QueryRow(apiKey).Scan(&u.ID, &u.Name, &isAdmin, &isStaff)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return User{}, nil
+			fmt.Println("No user found by that API Key")
+			return
 		}
 		log.Fatal(err)
 	}
 
 	if isAdmin == 1 {
-		user.Admin = true
+		u.Admin = true
 	} else {
-		user.Admin = false
+		u.Admin = false
 	}
 
 	if isStaff == 1 {
-		user.Staff = true
+		u.Staff = true
 	} else {
-		user.Staff = false
+		u.Staff = false
 	}
 
-	return user, nil
+	return
 }

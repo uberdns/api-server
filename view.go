@@ -18,9 +18,9 @@ func indexView(w http.ResponseWriter, r *http.Request) {
 
 func updateRecordView(w http.ResponseWriter, r *http.Request) {
 	if isValidRequest(w, r) {
-		apiKey := fmt.Sprintf("%s", r.Header["X-Api-Key"])
-		apiKey = strings.Trim(apiKey, "[")
-		apiKey = strings.Trim(apiKey, "]")
+		accessToken := getAPIKey(r)
+		user := User{}
+		user.LookupFromAPIKey(accessToken)
 
 		var reqRecord requestRecord
 		switch r.Method {
@@ -35,22 +35,25 @@ func updateRecordView(w http.ResponseWriter, r *http.Request) {
 				log.Fatal(err)
 			}
 
-			record, err := getRecordFromFQDN(reqRecord.Name)
-			if err != nil {
+			record := Record{}
+
+			if err = record.LookupFromFQDN(reqRecord.Name); err != nil {
 				log.Fatal(err)
 			}
-
-			if isAllowed(apiKey, record) {
-				err := updateRecord(&dbConn, record, reqRecord.IPAddress)
-				if err != nil {
+			if record.IsUserAllowed(user) {
+				record.IP = reqRecord.IPAddress
+				if err = record.Save(&dbConn); err != nil {
 					log.Fatal(err)
 				}
 				fmt.Fprintf(w, "Record was updated successfully")
-				err = recordCacheMsgHandler(redisCacheChannelName, "update", record)
-				if err != nil {
-					log.Printf(err.Error())
+				if err := record.Purge(recordChannel); err != nil {
+					log.Print("Unable to send purge record message to redis")
+					log.Fatal(err)
 				}
 
+				if err := record.Cache(recordChannel); err != nil {
+					log.Fatal(err)
+				}
 			} else {
 				w.WriteHeader(http.StatusForbidden)
 				w.Write([]byte("403 - Forbidden"))
@@ -62,9 +65,9 @@ func updateRecordView(w http.ResponseWriter, r *http.Request) {
 // To-do: Check for existing records
 func createRecordView(w http.ResponseWriter, r *http.Request) {
 	if isValidRequest(w, r) {
-		accessToken := fmt.Sprintf("%s", r.Header["X-Api-Key"])
-		accessToken = strings.Trim(accessToken, "[")
-		accessToken = strings.Trim(accessToken, "]")
+		accessToken := getAPIKey(r)
+		user := User{}
+		user.LookupFromAPIKey(accessToken)
 
 		var reqRecord requestRecord
 
@@ -80,11 +83,7 @@ func createRecordView(w http.ResponseWriter, r *http.Request) {
 				log.Fatal(err)
 			}
 
-			owner, err := getUserFromToken(accessToken)
-			if err != nil {
-				log.Fatal(err)
-			}
-			if (User{}) == owner {
+			if (User{}) == user {
 				// Empty user returned from token lookup - implied user not found
 				w.WriteHeader(http.StatusForbidden)
 				w.Write([]byte("403 - Forbidden"))
@@ -94,38 +93,35 @@ func createRecordView(w http.ResponseWriter, r *http.Request) {
 			recordName := strings.Split(reqRecord.Name, ".")[0]
 			domainName := strings.Join(strings.Split(reqRecord.Name, ".")[1:], ".")
 
-			domain, err := getDomainFromName(domainName)
-			if err != nil {
+			domain := Domain{}
+			if err := domain.LookupFromFQDN(domainName); err != nil {
 				log.Fatal(err)
 			}
 
 			record := Record{
-				Name:     recordName,
-				IP:       reqRecord.IPAddress,
-				TTL:      30,
-				Created:  time.Now(),
-				DomainID: domain.ID,
-				OwnerID:  owner.ID,
+				Name:      recordName,
+				IP:        reqRecord.IPAddress,
+				TTL:       30,
+				CreatedOn: time.Now(),
+				DomainID:  domain.ID,
+				OwnerID:   user.ID,
 			}
 
-			err = createRecord(&dbConn, record)
-			if err != nil {
+			if err = record.Save(&dbConn); err != nil {
 				log.Fatal(err)
 			}
 			// Perform SQL Query after creating the record to pull autoincrement values
 			// this is kinda clunky...but its on the api server so im not super worried...
 			// this might be worthy of refactoring at some point for brownie points
-			record, err = getRecordFromFQDN(reqRecord.Name)
-			if err != nil {
+			if err = record.LookupFromFQDN(reqRecord.Name); err != nil {
 				fmt.Println("problem querying database after creating record successfully")
 				log.Fatal(err)
 			}
 			fmt.Fprintf(w, "Record was created successfully: %s", reqRecord.Name)
-			addRecordToCache(record, recordChannel)
-			//err = recordCacheMsgHandler(redisCacheChannelName, "create", record)
-			//if err != nil {
-			//	fmt.Printf("Unable to populate cache with record %s", record.Name)
-			//}
+			if err = record.Cache(recordChannel); err != nil {
+				log.Fatal(err)
+			}
+
 			fmt.Println(record)
 		}
 	} else {
@@ -133,11 +129,40 @@ func createRecordView(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func listRecordView(w http.ResponseWriter, r *http.Request) {
+	if isValidRequest(w, r) {
+		accessToken := getAPIKey(r)
+		user := User{}
+		user.LookupFromAPIKey(accessToken)
+
+		if (User{}) == user {
+			// Empty user returned from token lookup - implied user not found
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("403 - Forbidden"))
+			return
+		}
+
+		// if requesting user is not an admin or staff, forbid access
+		if !user.Admin && !user.Staff {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("403 - Forbidden"))
+			return
+		}
+
+		records := listRecords(&dbConn)
+		recordJSON, err := json.Marshal(records)
+		if err != nil {
+			log.Fatal(err)
+		}
+		w.Write([]byte(recordJSON))
+	}
+}
+
 func deleteRecordView(w http.ResponseWriter, r *http.Request) {
 	if isValidRequest(w, r) {
-		accessToken := fmt.Sprintf("%s", r.Header["X-Api-Key"])
-		accessToken = strings.Trim(accessToken, "[")
-		accessToken = strings.Trim(accessToken, "]")
+		accessToken := getAPIKey(r)
+		user := User{}
+		user.LookupFromAPIKey(accessToken)
 
 		var reqRecord requestRecord
 
@@ -153,18 +178,21 @@ func deleteRecordView(w http.ResponseWriter, r *http.Request) {
 				log.Fatal(err)
 			}
 
-			record, err := getRecordFromFQDN(reqRecord.Name)
+			record := Record{}
 
-			if err != nil {
+			if err = record.LookupFromFQDN(reqRecord.Name); err != nil {
 				log.Fatal(err)
 			}
 
-			if isAllowed(accessToken, record) {
-				err = deleteRecord(&dbConn, record)
-				if err != nil {
+			if record.IsUserAllowed(user) {
+				if err = record.Delete(&dbConn); err != nil {
 					log.Fatal(err)
 				}
-				deleteRecordFromCache(record, recordChannel)
+				if err = record.Purge(recordChannel); err != nil {
+					log.Fatal(err)
+				}
+				w.Write([]byte("Record purged from cache"))
+				fmt.Println("Record purged from cache")
 			}
 		}
 
@@ -173,14 +201,10 @@ func deleteRecordView(w http.ResponseWriter, r *http.Request) {
 
 func purgeCacheView(w http.ResponseWriter, r *http.Request) {
 	if isValidRequest(w, r) {
-		accessToken := fmt.Sprintf("%s", r.Header["X-Api-Key"])
-		accessToken = strings.Trim(accessToken, "[")
-		accessToken = strings.Trim(accessToken, "]")
+		accessToken := getAPIKey(r)
+		user := User{}
+		user.LookupFromAPIKey(accessToken)
 
-		user, err := getUserFromToken(accessToken)
-		if err != nil {
-			log.Fatal(err)
-		}
 		if (User{}) == user {
 			// Empty user returned from token lookup - implied user not found
 			w.WriteHeader(http.StatusForbidden)
@@ -222,9 +246,9 @@ func purgeCacheView(w http.ResponseWriter, r *http.Request) {
 
 func purgeCacheRecordView(w http.ResponseWriter, r *http.Request) {
 	if isValidRequest(w, r) {
-		accessToken := fmt.Sprintf("%s", r.Header["X-Api-Key"])
-		accessToken = strings.Trim(accessToken, "[")
-		accessToken = strings.Trim(accessToken, "]")
+		accessToken := getAPIKey(r)
+		user := User{}
+		user.LookupFromAPIKey(accessToken)
 
 		type FQDN struct {
 			FQDN string
@@ -243,13 +267,17 @@ func purgeCacheRecordView(w http.ResponseWriter, r *http.Request) {
 				log.Fatal(err)
 			}
 
-			record, err := getRecordFromFQDN(reqRecord.FQDN)
-			if err != nil {
+			record := Record{}
+
+			if err = record.LookupFromFQDN(reqRecord.FQDN); err != nil {
 				log.Fatal(err)
 			}
 
-			if isAllowed(accessToken, record) {
-				deleteRecordFromCache(record, recordChannel)
+			if record.IsUserAllowed(user) {
+				if err = record.Purge(recordChannel); err != nil {
+					log.Fatal(err)
+				}
+				w.Write([]byte("Record purged from cache"))
 			}
 
 			fmt.Fprintf(w, "Record cached from purge globally. Please allow up to 30 seconds for this to reflect.")
@@ -260,14 +288,10 @@ func purgeCacheRecordView(w http.ResponseWriter, r *http.Request) {
 // To-do: Check for existing records
 func createDomainView(w http.ResponseWriter, r *http.Request) {
 	if isValidRequest(w, r) {
-		accessToken := fmt.Sprintf("%s", r.Header["X-Api-Key"])
-		accessToken = strings.Trim(accessToken, "[")
-		accessToken = strings.Trim(accessToken, "]")
+		accessToken := getAPIKey(r)
+		user := User{}
+		user.LookupFromAPIKey(accessToken)
 
-		user, err := getUserFromToken(accessToken)
-		if err != nil {
-			log.Fatal(err)
-		}
 		if (User{}) == user {
 			// Empty user returned from token lookup - implied user not found
 			w.WriteHeader(http.StatusForbidden)
@@ -280,7 +304,6 @@ func createDomainView(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
 			w.Write([]byte("403 - Forbidden"))
 			return
-
 		}
 
 		type reqDomain struct {
@@ -305,26 +328,55 @@ func createDomainView(w http.ResponseWriter, r *http.Request) {
 				Name: requestDomain.Name,
 			}
 
-			err = createDomain(&dbConn, domain)
-			if err != nil {
+			if err = domain.Save(&dbConn); err != nil {
 				log.Fatal(err)
 			}
 
 			fmt.Fprintf(w, "Domain was created successfully: %s", domain.Name)
+
+			if err = domain.Cache(domainChannel); err != nil {
+				log.Fatal(err)
+			}
 		}
+	}
+}
+
+func listDomainView(w http.ResponseWriter, r *http.Request) {
+	if isValidRequest(w, r) {
+		accessToken := getAPIKey(r)
+		user := User{}
+		user.LookupFromAPIKey(accessToken)
+
+		if (User{}) == user {
+			// Empty user returned from token lookup - implied user not found
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("403 - Forbidden"))
+			return
+		}
+
+		// if requesting user is not an admin or staff, forbid access
+		if !user.Admin && !user.Staff {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("403 - Forbidden"))
+			return
+		}
+
+		domains := listDomains(&dbConn)
+		domainJSON, err := json.Marshal(domains)
+		if err != nil {
+			log.Fatal(err)
+		}
+		w.Write([]byte(domainJSON))
+
 	}
 }
 
 func deleteDomainView(w http.ResponseWriter, r *http.Request) {
 	if isValidRequest(w, r) {
-		accessToken := fmt.Sprintf("%s", r.Header["X-Api-Key"])
-		accessToken = strings.Trim(accessToken, "[")
-		accessToken = strings.Trim(accessToken, "]")
+		accessToken := getAPIKey(r)
+		user := User{}
+		user.LookupFromAPIKey(accessToken)
 
-		user, err := getUserFromToken(accessToken)
-		if err != nil {
-			log.Fatal(err)
-		}
 		if (User{}) == user {
 			// Empty user returned from token lookup - implied user not found
 			w.WriteHeader(http.StatusForbidden)
@@ -357,13 +409,12 @@ func deleteDomainView(w http.ResponseWriter, r *http.Request) {
 				log.Fatal(err)
 			}
 
-			domain, err := getDomainFromName(reqDomain.Name)
-			if err != nil {
+			domain := Domain{}
+			if err := domain.LookupFromFQDN(reqDomain.Name); err != nil {
 				log.Fatal(err)
 			}
 
-			err = deleteDomain(&dbConn, domain)
-			if err != nil {
+			if err = domain.Delete(&dbConn); err != nil {
 				log.Fatal(err)
 			}
 

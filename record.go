@@ -2,22 +2,11 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
-	"time"
 )
-
-// Record -- struct for storing information regarding records
-type Record struct {
-	ID       int
-	Name     string
-	IP       string
-	TTL      int64 //TTL for caching
-	Created  time.Time
-	DomainID int
-	OwnerID  int
-}
 
 func recordExists(dbConn *sql.DB, record Record) bool {
 	var ret int
@@ -34,46 +23,38 @@ func recordExists(dbConn *sql.DB, record Record) bool {
 	return false
 }
 
-func createRecord(dbConn *sql.DB, record Record) error {
-	if !recordExists(dbConn, record) {
-		query := "INSERT INTO dns_record (name, ip_address, ttl, created_on, domain_id, owner_id) VALUES (?, ?, ?,  ?, ?, ?)"
-		dq, err := dbConn.Prepare(query)
-		if err != nil {
-			return err
-		}
-
-		defer dq.Close()
-
-		_, err = dq.Exec(record.Name, record.IP, record.TTL, record.Created, record.DomainID, record.OwnerID)
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-	return nil
-
-}
-
-func updateRecord(dbConn *sql.DB, record Record, newIPAddress string) error {
-	query := "UPDATE dns_record SET ip_address = ? WHERE id = ?"
+func (r *Record) Save(dbConn *sql.DB) error {
+	query := "INSERT INTO dns_record (name, ip_address, ttl, created_on, domain_id, owner_id) VALUES (?, ?, ?,  ?, ?, ?)"
 	dq, err := dbConn.Prepare(query)
-
 	if err != nil {
 		return err
 	}
 
 	defer dq.Close()
 
-	_, err = dq.Exec(newIPAddress, record.ID)
+	_, err = dq.Exec(r.Name, r.IP, r.TTL, r.CreatedOn, r.DomainID, r.OwnerID)
+	if err != nil {
+		return err
+	}
+	return nil
+}
 
+func (r *Record) Cache(channel chan<- CacheControlMessage) error {
+	jsonMSG, err := json.Marshal(r)
 	if err != nil {
 		return err
 	}
 
+	msg := CacheControlMessage{
+		Action: "create",
+		Type:   "record",
+		Object: string(jsonMSG),
+	}
+	channel <- msg
 	return nil
 }
 
-func deleteRecord(dbConn *sql.DB, record Record) error {
+func (r *Record) Delete(dbConn *sql.DB) error {
 	query := "DELETE FROM dns_record WHERE id = ?"
 	dq, err := dbConn.Prepare(query)
 
@@ -83,7 +64,7 @@ func deleteRecord(dbConn *sql.DB, record Record) error {
 
 	defer dq.Close()
 
-	_, err = dq.Exec(record.ID)
+	_, err = dq.Exec(r.ID)
 
 	if err != nil {
 		return err
@@ -92,15 +73,12 @@ func deleteRecord(dbConn *sql.DB, record Record) error {
 	return nil
 }
 
-func getRecordFromFQDN(fqdn string) (Record, error) {
-	var record Record
-
+func (r *Record) LookupFromFQDN(fqdn string) error {
 	recordName := strings.Split(fqdn, ".")[0]
 	topLevelDomain := strings.Join(strings.Split(fqdn, ".")[1:], ".")
 
-	domain, err := getDomainFromName(topLevelDomain)
-
-	if err != nil {
+	domain := Domain{}
+	if err := domain.LookupFromFQDN(topLevelDomain); err != nil {
 		log.Fatal(err)
 	}
 
@@ -114,14 +92,58 @@ func getRecordFromFQDN(fqdn string) (Record, error) {
 
 	defer dq.Close()
 
-	err = dq.QueryRow(recordName, domain.ID).Scan(&record.ID, &record.Name, &record.IP, &record.TTL, &record.Created, &record.OwnerID)
+	err = dq.QueryRow(recordName, domain.ID).Scan(&r.ID, &r.Name, &r.IP, &r.TTL, &r.CreatedOn, &r.OwnerID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			fmt.Println("Unable to find record with that FQDN.")
-			return Record{}, nil
+			return nil
 		}
 		log.Fatal(err)
 	}
 
-	return record, nil
+	return nil
+}
+
+func (r *Record) Purge(channel chan<- CacheControlMessage) error {
+	jsonMSG, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+
+	msg := CacheControlMessage{
+		Action: "purge",
+		Type:   "record",
+		Object: string(jsonMSG),
+	}
+
+	channel <- msg
+	return nil
+}
+
+func (r *Record) IsUserAllowed(user User) bool {
+	if r.OwnerID == user.ID {
+		return true
+	}
+
+	return false
+}
+
+func listRecords(dbConn *sql.DB) []Record {
+	var records []Record
+	query := "SELECT id, name, ip_address, ttl, created_on, owner_id FROM dns_record"
+
+	rows, err := dbConn.Query(query)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		record := Record{}
+		if err := rows.Scan(&record.ID, &record.Name, &record.IP, &record.TTL, &record.CreatedOn, &record.OwnerID); err != nil {
+			log.Fatal(err)
+		}
+		records = append(records, record)
+	}
+
+	return records
 }

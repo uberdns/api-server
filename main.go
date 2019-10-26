@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -22,24 +23,36 @@ import (
 	"gopkg.in/ini.v1"
 )
 
-// This is used to determine if the request is authorized
-// to update the requested record
-func isAllowed(accessToken string, record Record) bool {
-	user, err := getUserFromToken(accessToken)
-	if err != nil {
-		log.Fatal(err)
-	}
+// Domain -- struct for storing information regarding domains
+type Domain struct {
+	ID        int
+	Name      string
+	CreatedOn time.Time
+}
 
-	if user.ID == record.OwnerID {
-		return true
-	}
+// Record -- struct for storing information regarding records
+type Record struct {
+	ID        int
+	Name      string
+	IP        string
+	TTL       int64 //TTL for caching
+	CreatedOn time.Time
+	DomainID  int
+	OwnerID   int
+}
 
-	return false
+// CacheControlMessage -- struct for storing/parsing redis cache control messages
+//  					  to the dns server
+type CacheControlMessage struct {
+	Action string
+	Type   string
+	Object string
 }
 
 var (
-	domainChannel chan CacheControlMessage
-	recordChannel chan CacheControlMessage
+	domainChannel     chan CacheControlMessage
+	recordChannel     chan CacheControlMessage
+	redisCacheChannel string
 )
 
 func main() {
@@ -60,10 +73,10 @@ func main() {
 	redisHost := cfg.Section("redis").Key("host").String()
 	redisPassword := cfg.Section("redis").Key("password").String()
 	redisDB, _ := cfg.Section("redis").Key("db").Int()
-	redisCacheChannelName = cfg.Section("redis").Key("cache_channel").String()
+	redisCacheChannel = cfg.Section("redis").Key("cache_channel").String()
 
-	apiPort := cfg.Section("api").Key("api_port").String()
-	prometheusPort := cfg.Section("api").Key("prometheus_port").String()
+	apiPort, _ := cfg.Section("api").Key("api_port").Int()
+	prometheusPort, _ := cfg.Section("api").Key("prometheus_port").Int()
 	pprofPort, _ := cfg.Section("api").Key("pprof_port").Int()
 
 	go func() {
@@ -84,24 +97,21 @@ func main() {
 		panic(err.Error())
 	}
 
-	redisClient = redisConnect(redisHost, redisPassword, redisDB)
+	redisClient := redisConnect(redisHost, redisPassword, redisDB)
 
 	// start subscribing to redis cache channel and begin receiving data
-	_, err = redisClient.Subscribe(redisCacheChannelName).Receive()
-	if err != nil {
-		log.Fatal(err)
-	}
+	redisClient.Subscribe(redisCacheChannel).Receive()
 
 	domainChannel = make(chan CacheControlMessage)
-	go manageCacheChannel(domainChannel, redisClient, redisCacheChannelName)
+	go manageCacheChannel(domainChannel, redisClient, redisCacheChannel)
 
 	recordChannel = make(chan CacheControlMessage)
-	go manageCacheChannel(recordChannel, redisClient, redisCacheChannelName)
+	go manageCacheChannel(recordChannel, redisClient, redisCacheChannel)
 
 	// Start prometheus metrics
 	go func() {
 		http.Handle("/metrics", promhttp.Handler())
-		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", prometheusPort), nil))
+		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", prometheusPort), nil))
 	}()
 
 	go func() {
@@ -112,11 +122,13 @@ func main() {
 		router.HandleFunc("/cache/purge", purgeCacheView)
 		router.HandleFunc("/cache/record/purge", purgeCacheRecordView)
 		router.HandleFunc("/domain/create", createDomainView)
+		router.HandleFunc("/domain/list", listDomainView)
 		router.HandleFunc("/domain/delete", deleteDomainView)
 		router.HandleFunc("/record/create", createRecordView)
 		router.HandleFunc("/record/update", updateRecordView)
+		router.HandleFunc("/record/list", listRecordView)
 		router.HandleFunc("/record/delete", deleteRecordView)
-		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", apiPort), router))
+		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", apiPort), router))
 	}()
 
 	sig := make(chan os.Signal)
