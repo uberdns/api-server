@@ -16,6 +16,41 @@ func indexView(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func createJWTTokenView(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		fmt.Println(" should redirect to index")
+	case "POST":
+		type JWTRequest struct {
+			Username string
+			Password string
+		}
+		var jwtRequest = JWTRequest{}
+		decoder := json.NewDecoder(r.Body)
+
+		if err := decoder.Decode(&jwtRequest); err != nil {
+			log.Fatal(err)
+		}
+
+		var user = User{}
+		user.LookupFromName(jwtRequest.Username)
+
+		if (User{}) == user {
+			fmt.Printf("Username %s not found", jwtRequest.Username)
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("403 - Forbidden"))
+			return
+		}
+
+		if user.IsPasswordAuthenticated(jwtRequest.Password, &dbConn) {
+			jwtToken := JWTTokens{}
+			jwtToken.New(user.ID)
+			fmt.Println(jwtToken.String())
+		}
+
+	}
+}
+
 func updateRecordView(w http.ResponseWriter, r *http.Request) {
 	if isValidRequest(w, r) {
 		accessToken := getAPIKey(r)

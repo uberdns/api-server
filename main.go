@@ -13,13 +13,13 @@ import (
 	"net/http/pprof"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"github.com/gorilla/mux"
+
 	"gopkg.in/ini.v1"
 )
 
@@ -41,6 +41,11 @@ type Record struct {
 	OwnerID   int
 }
 
+type RequestCounter struct {
+	Total int
+	mu    sync.RWMutex
+}
+
 // CacheControlMessage -- struct for storing/parsing redis cache control messages
 //  					  to the dns server
 type CacheControlMessage struct {
@@ -50,9 +55,12 @@ type CacheControlMessage struct {
 }
 
 var (
-	domainChannel     chan CacheControlMessage
-	recordChannel     chan CacheControlMessage
-	redisCacheChannel string
+	domainChannel              chan CacheControlMessage
+	recordChannel              chan CacheControlMessage
+	redisCacheChannel          string
+	requestCounter             RequestCounter
+	unauthorizedRequestCounter RequestCounter
+	prometheusPort             int
 )
 
 func main() {
@@ -76,7 +84,7 @@ func main() {
 	redisCacheChannel = cfg.Section("redis").Key("cache_channel").String()
 
 	apiPort, _ := cfg.Section("api").Key("api_port").Int()
-	prometheusPort, _ := cfg.Section("api").Key("prometheus_port").Int()
+	prometheusPort, _ = cfg.Section("api").Key("prometheus_port").Int()
 	pprofPort, _ := cfg.Section("api").Key("pprof_port").Int()
 
 	go func() {
@@ -91,6 +99,14 @@ func main() {
 
 		http.ListenAndServe(fmt.Sprintf(":%d", pprofPort), r)
 	}()
+
+	requestCounter = RequestCounter{
+		Total: 0,
+	}
+
+	unauthorizedRequestCounter = RequestCounter{
+		Total: 0,
+	}
 
 	err = dbConnect(dbUser, dbPass, dbHost, dbPort, dbName)
 	if err != nil {
@@ -109,10 +125,7 @@ func main() {
 	go manageCacheChannel(recordChannel, redisClient, redisCacheChannel)
 
 	// Start prometheus metrics
-	go func() {
-		http.Handle("/metrics", promhttp.Handler())
-		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", prometheusPort), nil))
-	}()
+	go startPrometheus()
 
 	go func() {
 		router := mux.NewRouter().StrictSlash(true)
@@ -128,6 +141,7 @@ func main() {
 		router.HandleFunc("/record/update", updateRecordView)
 		router.HandleFunc("/record/list", listRecordView)
 		router.HandleFunc("/record/delete", deleteRecordView)
+		router.HandleFunc("/session/jwt/create", createJWTTokenView)
 		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", apiPort), router))
 	}()
 

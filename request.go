@@ -12,6 +12,23 @@ type requestRecord struct {
 	IPAddress string
 }
 
+func (ri *RequestCounter) Inc() {
+	ri.mu.Lock()
+	ri.Total++
+	ri.mu.Unlock()
+
+	return
+}
+
+func (ri *RequestCounter) Count() int {
+	var v int
+	ri.mu.Lock()
+	v = ri.Total
+	ri.mu.Unlock()
+
+	return v
+}
+
 func getAPIKey(r *http.Request) string {
 	accessToken := fmt.Sprintf("%s", r.Header["X-Api-Key"])
 	accessToken = strings.Trim(accessToken, "[")
@@ -21,6 +38,7 @@ func getAPIKey(r *http.Request) string {
 }
 
 func isValidRequest(w http.ResponseWriter, r *http.Request) bool {
+
 	valid := false
 
 	// Iterate over keylist of headers and make sure
@@ -34,6 +52,15 @@ func isValidRequest(w http.ResponseWriter, r *http.Request) bool {
 	if !valid {
 		w.WriteHeader(http.StatusForbidden)
 		w.Write([]byte("403 - Forbidden"))
+	}
+
+	//Piggyback off of request valid check for request counter (this is bad)
+
+	if valid {
+		fmt.Println(requestCounter.Count())
+		requestCounter.Inc()
+	} else {
+		unauthorizedRequestCounter.Inc()
 	}
 
 	return valid
