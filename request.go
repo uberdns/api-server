@@ -41,6 +41,21 @@ func isValidRequest(w http.ResponseWriter, r *http.Request) bool {
 
 	valid := false
 
+	for _, c := range r.Cookies() {
+		if "token" == c.Name {
+			// Check whether presented token is valid
+			var jwtToken = JWTToken{}
+			jwtToken.LookupFromString(c.Value)
+			if jwtToken.IsValid() {
+				valid = true
+				break
+			} else {
+				fmt.Println("Token invalid")
+			}
+		}
+
+	}
+
 	// Iterate over keylist of headers and make sure
 	// our required headers are present.
 	for k := range r.Header {
@@ -57,7 +72,6 @@ func isValidRequest(w http.ResponseWriter, r *http.Request) bool {
 	//Piggyback off of request valid check for request counter (this is bad)
 
 	if valid {
-		fmt.Println(requestCounter.Count())
 		requestCounter.Inc()
 	} else {
 		unauthorizedRequestCounter.Inc()

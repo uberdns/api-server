@@ -15,6 +15,7 @@ type JWTToken struct {
 	Salt      string
 	Issuer    string
 	ExpiresAt int64
+	UserID    int
 }
 
 type JWTTokens struct {
@@ -22,14 +23,21 @@ type JWTTokens struct {
 	RefreshToken JWTToken
 }
 
-func (t *JWTToken) New(tokenType string, userId int) {
-	type Claim struct {
-		TokenType string `json:"token_type"`
-		UserID    int    `json:"user_id"`
-		JTI       string `json:"jti"`
+type JWTTokenMessage struct {
+	Access  string `json:"access"`
+	Refresh string `json:"refresh"`
+}
 
-		jwt.StandardClaims
-	}
+type JWTClaim struct {
+	TokenType string `json:"token_type"`
+	UserID    int    `json:"user_id"`
+	JTI       string `json:"jti"`
+
+	jwt.StandardClaims
+}
+
+func (t *JWTToken) New(tokenType string) {
+
 	if t.ExpiresAt == 0 {
 		t.ExpiresAt = time.Now().Unix() + int64(60*5)
 	}
@@ -39,9 +47,9 @@ func (t *JWTToken) New(tokenType string, userId int) {
 		log.Fatal(err)
 	}
 
-	claims := Claim{
+	claims := JWTClaim{
 		tokenType,
-		userId,
+		t.UserID,
 		jti.String(),
 		jwt.StandardClaims{
 			ExpiresAt: t.ExpiresAt,
@@ -50,6 +58,31 @@ func (t *JWTToken) New(tokenType string, userId int) {
 	}
 
 	t.Token = jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+}
+
+func (t *JWTToken) LookupFromString(tokenStr string) {
+	token, err := jwt.ParseWithClaims(tokenStr, &JWTClaim{}, func(token *jwt.Token) (interface{}, error) {
+		return []byte(encryptionSalt), nil
+	})
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if claims, ok := token.Claims.(*JWTClaim); ok && token.Valid {
+		t.Token = token
+		t.UserID = claims.UserID
+		t.ExpiresAt = claims.ExpiresAt
+		t.Issuer = claims.Issuer
+	}
+}
+
+func (t *JWTToken) IsValid() bool {
+	if time.Now().Unix() < t.ExpiresAt {
+		return true
+	}
+
+	return false
 }
 
 func (t *JWTToken) SetSalt(salt string) {
@@ -67,17 +100,19 @@ func (t *JWTToken) String() string {
 
 func (j *JWTTokens) NewAccess(userId int) {
 	token := JWTToken{}
-	token.Salt = "bj#zojhb&my%6lcs$7t5w)hzb@7s-mhxvqd35h9##f%kywo%$7"
+	token.Salt = encryptionSalt
 	token.ExpiresAt = time.Now().Unix() + int64(60*5)
-	token.New("access", userId)
+	token.UserID = userId
+	token.New("access")
 	j.AccessToken = token
 }
 
 func (j *JWTTokens) NewRefresh(userId int) {
 	token := JWTToken{}
-	token.Salt = "bj#zojhb&my%6lcs$7t5w)hzb@7s-mhxvqd35h9##f%kywo%$7"
+	token.Salt = encryptionSalt
 	token.ExpiresAt = time.Now().Unix() + int64(60*10)
-	token.New("refresh", userId)
+	token.UserID = userId
+	token.New("refresh")
 	j.RefreshToken = token
 }
 
@@ -87,11 +122,7 @@ func (j *JWTTokens) New(userId int) {
 }
 
 func (j *JWTTokens) String() string {
-	type TokenMessage struct {
-		Access  string `json:"access"`
-		Refresh string `json:"refresh"`
-	}
-	tokenMSG := TokenMessage{}
+	tokenMSG := JWTTokenMessage{}
 	tokenMSG.Access = j.AccessToken.String()
 	tokenMSG.Refresh = j.RefreshToken.String()
 

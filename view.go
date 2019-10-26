@@ -459,22 +459,40 @@ func deleteDomainView(w http.ResponseWriter, r *http.Request) {
 }
 
 func loginView(w http.ResponseWriter, r *http.Request) {
-	fmt.Println(r.Header)
-
 	switch r.Method {
 	case "GET":
 		fmt.Println("Should redirect to index")
 	case "POST":
-		fmt.Println("nice")
-	}
-	user := User{ID: 1}
-	token, err := getTokenForUser(&dbConn, user)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Fprintf(w, "{\"token\": \"%s\"}", token)
-	fmt.Println(token)
+		decoder := json.NewDecoder(r.Body)
 
+		type Credentials struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		var credentials = Credentials{}
+		if err := decoder.Decode(&credentials); err != nil {
+			log.Fatal(err)
+		}
+
+		var user = User{}
+		user.LookupFromName(credentials.Username)
+		if user.IsPasswordAuthenticated(credentials.Password, &dbConn) {
+			var jwtTokens = JWTTokens{}
+			jwtTokens.New(user.ID)
+
+			http.SetCookie(w, &http.Cookie{
+				Name:    "token",
+				Value:   jwtTokens.AccessToken.String(),
+				Expires: time.Now().Add(300 * time.Second),
+			})
+
+			http.Redirect(w, r, r.Header.Get("Referer"), 302)
+			return
+		} else {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+	}
 }
 
 func logoutView(w http.ResponseWriter, r *http.Request) {

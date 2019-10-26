@@ -61,13 +61,18 @@ var (
 	requestCounter             RequestCounter
 	unauthorizedRequestCounter RequestCounter
 	prometheusPort             int
+	encryptionSalt             string
 )
 
 func main() {
 	cfgFile := flag.String("config", "config.ini", "Path to the config file")
 	flag.Parse()
 
-	cfg, err := ini.Load(*cfgFile)
+	iniOptions := ini.LoadOptions{
+		IgnoreInlineComment: true, // ini craps out when a string contains a # char
+	}
+
+	cfg, err := ini.LoadSources(iniOptions, *cfgFile)
 	if err != nil {
 		panic(err.Error())
 	}
@@ -86,6 +91,8 @@ func main() {
 	apiPort, _ := cfg.Section("api").Key("api_port").Int()
 	prometheusPort, _ = cfg.Section("api").Key("prometheus_port").Int()
 	pprofPort, _ := cfg.Section("api").Key("pprof_port").Int()
+
+	encryptionSalt = cfg.Section("security").Key("secret_key").String()
 
 	go func() {
 		r := http.NewServeMux()
