@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
@@ -65,10 +66,17 @@ func (t *JWTToken) LookupFromString(tokenStr string) {
 		return []byte(encryptionSalt), nil
 	})
 
-	if err != nil {
-		log.Fatal(err)
+	if !token.Valid {
+		if ve, ok := err.(*jwt.ValidationError); ok {
+			if ve.Errors&jwt.ValidationErrorMalformed != 0 {
+				fmt.Println("thats not even a token")
+			} else if ve.Errors&jwt.ValidationErrorExpired != 0 {
+				fmt.Println("Token outside of valid time")
+			}
+		} else {
+			log.Fatal(err)
+		}
 	}
-
 	if claims, ok := token.Claims.(*JWTClaim); ok && token.Valid {
 		t.Token = token
 		t.UserID = claims.UserID

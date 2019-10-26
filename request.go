@@ -37,45 +37,131 @@ func getAPIKey(r *http.Request) string {
 	return accessToken
 }
 
-func isValidRequest(w http.ResponseWriter, r *http.Request) bool {
+func RequestHasAPIKey(r *http.Request) bool {
+	for k := range r.Header {
+		if k == "X-Api-Key" {
+			return true
+		}
+	}
 
-	valid := false
+	return false
+}
 
+func RequestHasBearerToken(r *http.Request) bool {
 	for _, c := range r.Cookies() {
 		if "token" == c.Name {
-			// Check whether presented token is valid
-			var jwtToken = JWTToken{}
-			jwtToken.LookupFromString(c.Value)
-			if jwtToken.IsValid() {
-				valid = true
-				break
-			} else {
-				fmt.Println("Token invalid")
+			return true
+		}
+	}
+
+	for k := range r.Header {
+		if k == "Authorization" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func getUserFromRequest(r *http.Request) User {
+	var user User
+	if RequestHasAPIKey(r) {
+		accessToken := getAPIKey(r)
+		user.LookupFromAPIKey(accessToken)
+	}
+
+	if RequestHasBearerToken(r) {
+		for _, c := range r.Cookies() {
+			if "token" == c.Name {
+				var jwtToken = JWTToken{}
+				jwtToken.LookupFromString(c.Value)
+				if jwtToken.IsValid() {
+					user.ID = jwtToken.UserID
+					user.LookupFromID()
+					break
+				}
 			}
 		}
 
-	}
-
-	// Iterate over keylist of headers and make sure
-	// our required headers are present.
-	for k := range r.Header {
-		if k == "X-Api-Key" {
-			valid = true
+		for k := range r.Header {
+			if k == "Authorization" {
+				bearerToken := strings.Split(r.Header.Get(k), "Bearer")[1]
+				bearerToken = strings.Trim(bearerToken, " ")
+				var jwtToken = JWTToken{}
+				jwtToken.LookupFromString(bearerToken)
+				if jwtToken.IsValid() {
+					user.ID = jwtToken.UserID
+					user.LookupFromID()
+					break
+				}
+			}
 		}
 	}
 
-	if !valid {
-		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte("403 - Forbidden"))
-	}
+	return user
+}
 
-	//Piggyback off of request valid check for request counter (this is bad)
+func requestMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check for a request body
+		//if r.ContentLength == 0 {
+		//	w.WriteHeader(http.StatusBadRequest)
+		//	return
+		//}
 
-	if valid {
-		requestCounter.Inc()
-	} else {
-		unauthorizedRequestCounter.Inc()
-	}
+		// Check for valid Bearer token as a cookie stored as token
+		for _, c := range r.Cookies() {
+			if "token" == c.Name {
+				// Check whether presented token is valid
+				var jwtToken = JWTToken{}
+				jwtToken.LookupFromString(c.Value)
+				if !jwtToken.IsValid() {
+					unauthorizedRequestCounter.Inc()
+					w.WriteHeader(http.StatusUnauthorized)
+					http.Redirect(w, r, "/login", 302)
+					//w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				// Increment authorized request counter
+				requestCounter.Inc()
+				next.ServeHTTP(w, r)
+			}
+		}
 
-	return valid
+		// check for valid bearer token as a header (curl/api)
+		for k := range r.Header {
+			if k == "Authorization" {
+				bearerToken := strings.Split(r.Header.Get(k), "Bearer")[1]
+				bearerToken = strings.Trim(bearerToken, " ")
+				var jwtToken = JWTToken{}
+				jwtToken.LookupFromString(bearerToken)
+				if !jwtToken.IsValid() {
+					unauthorizedRequestCounter.Inc()
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				// Hey its a valid jwt token!
+				requestCounter.Inc()
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
+		fmt.Println("No bearer token")
+		// No bearer token presented, no worries - we can check api key!
+		// Iterate over keylist of headers and make sure
+		// our required headers are present.
+		headerValid := RequestHasAPIKey(r)
+		for k := range r.Header {
+			if k == "X-Api-Key" {
+				headerValid = true
+			}
+		}
+
+		if !headerValid {
+			w.WriteHeader(http.StatusBadRequest)
+			unauthorizedRequestCounter.Inc()
+			return
+		}
+	})
 }

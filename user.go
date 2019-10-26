@@ -80,6 +80,31 @@ func (u *User) LookupFromName(username string) {
 	return
 }
 
+func (u *User) HasAPIKey(apiKey string, dbConn *sql.DB) bool {
+	query := "SELECT COUNT(*) FROM auth_user INNER JOIN authtoken_token ON auth_user.id = authtoken_token.user_id WHERE authtoken_token.key = ?"
+
+	var count int
+	dq, err := dbConn.Prepare(query)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer dq.Close()
+
+	if err := dq.QueryRow(apiKey).Scan(&count); err != nil {
+		if err == sql.ErrNoRows {
+			return false
+		}
+		log.Fatal(err)
+	}
+
+	if count == 1 {
+		return true
+	}
+	log.Fatalf("Error: Duplicate API keys detected in database - %s", apiKey)
+	return true
+}
+
 func (u *User) LookupFromAPIKey(apiKey string) {
 	var isAdmin int
 	var isStaff int
@@ -95,6 +120,44 @@ func (u *User) LookupFromAPIKey(apiKey string) {
 	defer dq.Close()
 
 	err = dq.QueryRow(apiKey).Scan(&u.ID, &u.Name, &isAdmin, &isStaff)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			fmt.Println("No user found by that API Key")
+			return
+		}
+		log.Fatal(err)
+	}
+
+	if isAdmin == 1 {
+		u.Admin = true
+	} else {
+		u.Admin = false
+	}
+
+	if isStaff == 1 {
+		u.Staff = true
+	} else {
+		u.Staff = false
+	}
+
+	return
+}
+
+func (u *User) LookupFromID() {
+	var isAdmin int
+	var isStaff int
+
+	query := "SELECT username, is_superuser, is_staff FROM auth_user WHERE id = ?"
+
+	dq, err := dbConn.Prepare(query)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	defer dq.Close()
+
+	err = dq.QueryRow(u.ID).Scan(&u.Name, &isAdmin, &isStaff)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			fmt.Println("No user found by that API Key")
