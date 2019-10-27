@@ -25,20 +25,20 @@ import (
 
 // Domain -- struct for storing information regarding domains
 type Domain struct {
-	ID        int
-	Name      string
-	CreatedOn time.Time
+	ID        int       `json:"id"`
+	Name      string    `json:"name"`
+	CreatedOn time.Time `json:"created_on"`
 }
 
 // Record -- struct for storing information regarding records
 type Record struct {
-	ID        int
-	Name      string
-	IP        string
-	TTL       int64 //TTL for caching
-	CreatedOn time.Time
-	DomainID  int
-	OwnerID   int
+	ID        int       `json:"id"`
+	Name      string    `json:"name"`
+	IP        string    `json:"ip"`
+	TTL       int64     `json:"ttl"` //TTL for caching
+	CreatedOn time.Time `json:"created_on"`
+	DomainID  int       `json:"domain_id"`
+	OwnerID   int       `json:"owner_id"`
 }
 
 type RequestCounter struct {
@@ -147,8 +147,10 @@ func main() {
 		router.HandleFunc("/record/create", requestMiddleware(createRecordView))
 		router.HandleFunc("/record/update", requestMiddleware(updateRecordView))
 		router.HandleFunc("/record/list", requestMiddleware(listRecordView))
+		router.HandleFunc("/record/list/all", requestMiddleware(listAllRecordView))
 		router.HandleFunc("/record/delete", requestMiddleware(deleteRecordView))
 		router.HandleFunc("/session/jwt/create", requestMiddleware(createJWTTokenView))
+		router.HandleFunc("/user/profile", requestMiddleware(userProfileView))
 		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", apiPort), router))
 	}()
 

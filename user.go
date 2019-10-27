@@ -44,6 +44,30 @@ func (u *User) IsPasswordAuthenticated(password string, dbConn *sql.DB) bool {
 
 }
 
+func (u *User) GetRecords(dbConn *sql.DB) []Record {
+	var records []Record
+	query := "SELECT id, name, ip_address, ttl, created_on FROM dns_record WHERE owner_id = ?"
+
+	dq, err := dbConn.Prepare(query)
+
+	rows, err := dq.Query(u.ID)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		record := Record{}
+		if err := rows.Scan(&record.ID, &record.Name, &record.IP, &record.TTL, &record.CreatedOn); err != nil {
+			log.Fatal(err)
+		}
+		// if record lookup successful, tag record as ours for return
+		record.OwnerID = u.ID
+		records = append(records, record)
+	}
+
+	return records
+}
+
 func (u *User) LookupFromName(username string) {
 	var isAdmin int
 	var isStaff int

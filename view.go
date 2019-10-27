@@ -163,7 +163,26 @@ func listRecordView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// if requesting user is not an admin or staff, forbid access
+	records := user.GetRecords(&dbConn)
+	recordJSON, err := json.Marshal(records)
+	if err != nil {
+		log.Fatal(err)
+	}
+	w.Write([]byte(recordJSON))
+}
+
+func listAllRecordView(w http.ResponseWriter, r *http.Request) {
+	user := getUserFromRequest(r)
+
+	if (User{}) == user {
+		fmt.Println("User not found")
+		// Empty user returned from token lookup - implied user not found
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("403 - Forbidden"))
+		return
+	}
+
+	// if requesting user is not an admin or staff, forbid access to ALL records
 	if !user.Admin && !user.Staff {
 		w.WriteHeader(http.StatusForbidden)
 		w.Write([]byte("403 - Forbidden"))
@@ -482,5 +501,36 @@ func logoutView(w http.ResponseWriter, r *http.Request) {
 	err := tokenInvalidate(&dbConn, token)
 	if err != nil {
 		log.Fatal(err)
+	}
+}
+
+func userProfileView(w http.ResponseWriter, r *http.Request) {
+	user := getUserFromRequest(r)
+
+	if (User{}) == user {
+		// Empty user returned from token lookup - implied user not found
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte("403 - Forbidden"))
+		return
+	}
+
+	type UserProfile struct {
+		ID      int      `json:"id"`
+		Name    string   `json:"name"`
+		Records []Record `json:"records"`
+	}
+
+	switch r.Method {
+	case "GET":
+		userProfile := UserProfile{}
+		userProfile.ID = user.ID
+		userProfile.Name = user.Name
+		userProfile.Records = user.GetRecords(&dbConn)
+		recordsJSON, err := json.Marshal(userProfile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		w.Write([]byte(recordsJSON))
+		return
 	}
 }
