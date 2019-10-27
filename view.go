@@ -470,15 +470,16 @@ func loginView(w http.ResponseWriter, r *http.Request) {
 			jwtTokens.New(user.ID)
 
 			http.SetCookie(w, &http.Cookie{
-				Name:    "token",
-				Value:   jwtTokens.AccessToken.String(),
-				Expires: time.Now().Add(300 * time.Second),
+				Name:       "token",
+				Value:      jwtTokens.AccessToken.String(),
+				Expires:    time.Now().Add(300 * time.Second),
+				RawExpires: time.Now().Add(300 * time.Second).String(),
+				MaxAge:     300,
 			})
 			w.Header().Add("Content-Type", "application/json")
 			w.Header().Add("Access-Control-Allow-Origin", "*")
 			w.Header().Add("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
 			w.Write([]byte(jwtTokens.String()))
-			//http.Redirect(w, r, r.Header.Get("Referer"), 302)
 			return
 		} else {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -505,23 +506,24 @@ func logoutView(w http.ResponseWriter, r *http.Request) {
 }
 
 func userProfileView(w http.ResponseWriter, r *http.Request) {
-	user := getUserFromRequest(r)
-
-	if (User{}) == user {
-		// Empty user returned from token lookup - implied user not found
-		w.WriteHeader(http.StatusForbidden)
-		w.Write([]byte("403 - Forbidden"))
-		return
-	}
-
-	type UserProfile struct {
-		ID      int      `json:"id"`
-		Name    string   `json:"name"`
-		Records []Record `json:"records"`
-	}
 
 	switch r.Method {
+
 	case "GET":
+
+		user := getUserFromRequest(r)
+
+		if (User{}) == user {
+			// Empty user returned from token lookup - implied user not found
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("403 - Forbidden"))
+			return
+		}
+		type UserProfile struct {
+			ID      int      `json:"id"`
+			Name    string   `json:"name"`
+			Records []Record `json:"records"`
+		}
 		userProfile := UserProfile{}
 		userProfile.ID = user.ID
 		userProfile.Name = user.Name
@@ -530,6 +532,7 @@ func userProfileView(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Fatal(err)
 		}
+		w.Header().Add("Content-Type", "application/json")
 		w.Write([]byte(recordsJSON))
 		return
 	}

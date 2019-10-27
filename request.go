@@ -109,16 +109,32 @@ func requestMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		//	return
 		//}
 
+		// this is required with cors site checks....once everything runs under the same domain we should remove this
+		switch r.Method {
+		case "OPTIONS":
+			w.Header().Add("Access-Control-Allow-Origin", "*")
+			w.Header().Add("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+			w.Header().Add("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+			return
+		case "GET":
+			w.Header().Add("Access-Control-Allow-Origin", "*")
+			w.Header().Add("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+			w.Header().Add("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+		case "POST":
+			w.Header().Add("Access-Control-Allow-Origin", "*")
+			w.Header().Add("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+			w.Header().Add("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+		}
+
 		// Check for valid Bearer token as a cookie stored as token
 		for _, c := range r.Cookies() {
 			if "token" == c.Name {
 				// Check whether presented token is valid
-				var jwtToken = JWTToken{}
+				jwtToken := JWTToken{}
 				jwtToken.LookupFromString(c.Value)
 				if !jwtToken.IsValid() {
 					unauthorizedRequestCounter.Inc()
 					w.WriteHeader(http.StatusUnauthorized)
-					http.Redirect(w, r, "/login", 302)
 					//w.WriteHeader(http.StatusUnauthorized)
 					return
 				}
@@ -133,7 +149,13 @@ func requestMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			if k == "Authorization" {
 				bearerToken := strings.Split(r.Header.Get(k), "Bearer")[1]
 				bearerToken = strings.Trim(bearerToken, " ")
-				var jwtToken = JWTToken{}
+				// chrome sometimes sends null bearers lol
+				if bearerToken == "null" {
+					unauthorizedRequestCounter.Inc()
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				jwtToken := JWTToken{}
 				jwtToken.LookupFromString(bearerToken)
 				if !jwtToken.IsValid() {
 					unauthorizedRequestCounter.Inc()
