@@ -425,6 +425,11 @@ func deleteDomainView(w http.ResponseWriter, r *http.Request) {
 
 func loginView(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
+	case "OPTIONS":
+		w.Header().Add("Access-Control-Allow-Origin", "*")
+		w.Header().Add("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+		w.Header().Add("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+		return
 	case "GET":
 		fmt.Println("Should redirect to index")
 	case "POST":
@@ -450,8 +455,11 @@ func loginView(w http.ResponseWriter, r *http.Request) {
 				Value:   jwtTokens.AccessToken.String(),
 				Expires: time.Now().Add(300 * time.Second),
 			})
-
-			http.Redirect(w, r, r.Header.Get("Referer"), 302)
+			w.Header().Add("Content-Type", "application/json")
+			w.Header().Add("Access-Control-Allow-Origin", "*")
+			w.Header().Add("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+			w.Write([]byte(jwtTokens.String()))
+			//http.Redirect(w, r, r.Header.Get("Referer"), 302)
 			return
 		} else {
 			w.WriteHeader(http.StatusUnauthorized)
