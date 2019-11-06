@@ -10,5 +10,5 @@ require (
 	github.com/gorilla/mux v1.7.3
 	github.com/prometheus/client_golang v1.2.1
 	golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2
-	gopkg.in/ini.v1 v1.49.0
+	gopkg.in/ini.v1 v1.50.0
 )
