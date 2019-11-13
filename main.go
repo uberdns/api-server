@@ -13,40 +13,66 @@ import (
 	"net/http/pprof"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
+	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"github.com/gorilla/mux"
+
 	"gopkg.in/ini.v1"
 )
 
-// This is used to determine if the request is authorized
-// to update the requested record
-func isAllowed(accessToken string, record Record) bool {
-	user, err := getUserFromToken(accessToken)
-	if err != nil {
-		log.Fatal(err)
-	}
+// Domain -- struct for storing information regarding domains
+type Domain struct {
+	ID        int       `json:"id"`
+	Name      string    `json:"name"`
+	CreatedOn time.Time `json:"created_on"`
+}
 
-	if user.ID == record.OwnerID {
-		return true
-	}
+// Record -- struct for storing information regarding records
+type Record struct {
+	ID        int       `json:"id"`
+	Name      string    `json:"name"`
+	IP        string    `json:"ip"`
+	TTL       int64     `json:"ttl"` //TTL for caching
+	CreatedOn time.Time `json:"created_on"`
+	DomainID  int       `json:"domain_id"`
+	OwnerID   int       `json:"owner_id"`
+}
 
-	return false
+type RequestCounter struct {
+	Total int
+	mu    sync.RWMutex
+}
+
+// CacheControlMessage -- struct for storing/parsing redis cache control messages
+//  					  to the dns server
+type CacheControlMessage struct {
+	Action string
+	Type   string
+	Object string
 }
 
 var (
-	domainChannel chan CacheControlMessage
-	recordChannel chan CacheControlMessage
+	domainChannel              chan CacheControlMessage
+	recordChannel              chan CacheControlMessage
+	redisCacheChannel          string
+	requestCounter             RequestCounter
+	unauthorizedRequestCounter RequestCounter
+	prometheusPort             int
+	encryptionSalt             string
 )
 
 func main() {
 	cfgFile := flag.String("config", "config.ini", "Path to the config file")
 	flag.Parse()
 
-	cfg, err := ini.Load(*cfgFile)
+	iniOptions := ini.LoadOptions{
+		IgnoreInlineComment: true, // ini craps out when a string contains a # char
+	}
+
+	cfg, err := ini.LoadSources(iniOptions, *cfgFile)
 	if err != nil {
 		panic(err.Error())
 	}
@@ -60,10 +86,10 @@ func main() {
 	redisHost := cfg.Section("redis").Key("host").String()
 	redisPassword := cfg.Section("redis").Key("password").String()
 	redisDB, _ := cfg.Section("redis").Key("db").Int()
-	redisCacheChannelName = cfg.Section("redis").Key("cache_channel").String()
+	redisCacheChannel = cfg.Section("redis").Key("cache_channel").String()
 
-	apiPort := cfg.Section("api").Key("api_port").String()
-	prometheusPort := cfg.Section("api").Key("prometheus_port").String()
+	apiPort, _ := cfg.Section("api").Key("api_port").Int()
+	prometheusPort, _ = cfg.Section("api").Key("prometheus_port").Int()
 	pprofPort, _ := cfg.Section("api").Key("pprof_port").Int()
 	logFilename := cfg.Section("api").Key("log_file").String()
 
@@ -76,6 +102,8 @@ func main() {
 	} else {
 		log.SetOutput(logFile)
 	}
+
+	encryptionSalt = cfg.Section("security").Key("secret_key").String()
 
 	go func() {
 		r := http.NewServeMux()
@@ -90,44 +118,51 @@ func main() {
 		http.ListenAndServe(fmt.Sprintf(":%d", pprofPort), r)
 	}()
 
+	requestCounter = RequestCounter{
+		Total: 0,
+	}
+
+	unauthorizedRequestCounter = RequestCounter{
+		Total: 0,
+	}
+
 	err = dbConnect(dbUser, dbPass, dbHost, dbPort, dbName)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	redisClient = redisConnect(redisHost, redisPassword, redisDB)
+	redisClient := redisConnect(redisHost, redisPassword, redisDB)
 
 	// start subscribing to redis cache channel and begin receiving data
-	_, err = redisClient.Subscribe(redisCacheChannelName).Receive()
-	if err != nil {
-		log.Fatal(err)
-	}
+	redisClient.Subscribe(redisCacheChannel).Receive()
 
 	domainChannel = make(chan CacheControlMessage)
-	go manageCacheChannel(domainChannel, redisClient, redisCacheChannelName)
+	go manageCacheChannel(domainChannel, redisClient, redisCacheChannel)
 
 	recordChannel = make(chan CacheControlMessage)
-	go manageCacheChannel(recordChannel, redisClient, redisCacheChannelName)
+	go manageCacheChannel(recordChannel, redisClient, redisCacheChannel)
 
 	// Start prometheus metrics
-	go func() {
-		http.Handle("/metrics", promhttp.Handler())
-		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", prometheusPort), nil))
-	}()
+	go startPrometheus()
 
 	go func() {
 		router := mux.NewRouter().StrictSlash(true)
-		router.HandleFunc("/", indexView)
-		router.HandleFunc("/login", loginView)
-		router.HandleFunc("/logout", logoutView)
-		router.HandleFunc("/cache/purge", purgeCacheView)
-		router.HandleFunc("/cache/record/purge", purgeCacheRecordView)
-		router.HandleFunc("/domain/create", createDomainView)
-		router.HandleFunc("/domain/delete", deleteDomainView)
-		router.HandleFunc("/record/create", createRecordView)
-		router.HandleFunc("/record/update", updateRecordView)
-		router.HandleFunc("/record/delete", deleteRecordView)
-		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%s", apiPort), router))
+		router.HandleFunc("/", requestMiddleware(indexView))
+		router.HandleFunc("/login", loginView) // No middleware here as its expected to have a clean session state
+		router.HandleFunc("/logout", requestMiddleware(logoutView))
+		router.HandleFunc("/cache/purge", requestMiddleware(purgeCacheView))
+		router.HandleFunc("/cache/record/purge", requestMiddleware(purgeCacheRecordView))
+		router.HandleFunc("/domain/create", requestMiddleware(createDomainView))
+		router.HandleFunc("/domain/list", requestMiddleware(listDomainView))
+		router.HandleFunc("/domain/delete", requestMiddleware(deleteDomainView))
+		router.HandleFunc("/record/create", requestMiddleware(createRecordView))
+		router.HandleFunc("/record/update", requestMiddleware(updateRecordView))
+		router.HandleFunc("/record/list", requestMiddleware(listRecordView))
+		router.HandleFunc("/record/list/all", requestMiddleware(listAllRecordView))
+		router.HandleFunc("/record/delete", requestMiddleware(deleteRecordView))
+		router.HandleFunc("/session/jwt/create", requestMiddleware(createJWTTokenView))
+		router.HandleFunc("/user/profile", requestMiddleware(userProfileView))
+		log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", apiPort), router))
 	}()
 
 	sig := make(chan os.Signal)
