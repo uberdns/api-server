@@ -17,7 +17,7 @@ func dbConnect(username string, password string, host string, port int, database
 
 	err = dbc.Ping()
 	if err != nil {
-		panic(err.Error())
+		return err
 	}
 
 	dbConn = *dbc

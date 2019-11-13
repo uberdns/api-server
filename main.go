@@ -8,7 +8,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
+	log "github.com/sirupsen/logrus"
 	"net/http"
 	"net/http/pprof"
 	"os"
@@ -65,6 +65,17 @@ func main() {
 	apiPort := cfg.Section("api").Key("api_port").String()
 	prometheusPort := cfg.Section("api").Key("prometheus_port").String()
 	pprofPort, _ := cfg.Section("api").Key("pprof_port").Int()
+	logFilename := cfg.Section("api").Key("log_file").String()
+
+	logFile, err := os.OpenFile(logFilename, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
+	formatter := new(log.TextFormatter)
+	formatter.FullTimestamp = true
+	log.SetFormatter(formatter)
+	if err != nil {
+		log.Fatal(err)
+	} else {
+		log.SetOutput(logFile)
+	}
 
 	go func() {
 		r := http.NewServeMux()
@@ -81,7 +92,7 @@ func main() {
 
 	err = dbConnect(dbUser, dbPass, dbHost, dbPort, dbName)
 	if err != nil {
-		panic(err.Error())
+		log.Fatal(err)
 	}
 
 	redisClient = redisConnect(redisHost, redisPassword, redisDB)

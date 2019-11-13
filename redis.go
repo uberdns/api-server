@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+	log "github.com/sirupsen/logrus"
 	"time"
 
 	"github.com/go-redis/redis"
@@ -35,7 +35,7 @@ func redisConnect(redisHost string, redisPassword string, redisDB int) *redis.Cl
 			for range ticker.C {
 				_, err := redisClient.Ping().Result()
 				if err != nil {
-					log.Println("[REDIS] Unable to communicate with " + redisHost)
+					log.Error("[REDIS] Unable to communicate with " + redisHost)
 				}
 			}
 

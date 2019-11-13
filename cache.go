@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/json"
-	"log"
+	log "github.com/sirupsen/logrus"
 
 	"github.com/go-redis/redis"
 )
@@ -115,7 +115,7 @@ func recordCacheMsgHandler(cacheChannel string, action string, record Record) er
 
 	err = redisClient.Publish(cacheChannel, msgJSON).Err()
 	if err != nil {
-		log.Println("Unable to publish cache message")
+		log.Warning("Unable to publish cache message")
 		return err
 	}
 	return nil
