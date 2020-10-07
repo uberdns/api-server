@@ -14,5 +14,5 @@ require (
 	github.com/sirupsen/logrus v1.4.2
 	github.com/smartystreets/goconvey v1.6.4 // indirect
 	golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2
-	gopkg.in/ini.v1 v1.51.0
+	gopkg.in/ini.v1 v1.62.0
 )
